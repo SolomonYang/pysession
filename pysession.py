@@ -94,6 +94,9 @@ class pysession:
         self.device_os = device_os
         self.device_version = device_version
 
+        # print each cmd in pretty line formate
+        self.pprint = False
+
         # debug level, the higher, the more verbose, default is 0, which 
         # means none debug
         self.debug_level = debug_level
@@ -634,6 +637,9 @@ class pysession:
         '''
         transmit one cmd
         '''
+        if self.pprint:
+            print '\n' + pys_lib.pline1(cmd)
+
         if self.cmd_change_prompt(cmd=cmd): 
             self.child.send(cmd + self.EOL) 
             _output1 = self.parse_prompt()
@@ -819,6 +825,8 @@ class pys_lib:
     
         return pert 
     
+    # ----------------------------------------------------------------------- #
+    @staticmethod
     def psleep(num_sec):
         """
         pretty sleep
@@ -836,6 +844,30 @@ class pys_lib:
             sys.stdout.flush()
         print '\n'
     
+    # ----------------------------------------------------------------------- #
+    @staticmethod
+    def pline1(line): 
+        """
+        pline1 - pretty line 1
+        !!!!!!!!!!!!!!!!!!!! LINE !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        """
+        l = len(line) 
+        ll= (78-l)/2 
+        return '%s %s %s' % ('!'*ll, line, '!'*(78-l-ll))
+
+    # ----------------------------------------------------------------------- #
+    @staticmethod
+    def pline2(line): 
+        """
+        pline2 - pretty line 2
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !                    LINE                        !
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        """
+        l = len(line) 
+        ll= (78-l)/2 
+        return '%s\n!%s%s%s\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), '!'*80)
+
 if __name__ == '__main__':
     rtr = pysession(session='interactive')
 
