@@ -19,7 +19,7 @@ __device_version__ = '0.1'
 MAX_READ = 163840
 
 CR = '\r'
-LF = '\r'
+LF = '\n'
 CRLF = '\r\n'
 
 
@@ -352,13 +352,6 @@ class pysession:
         self.child = pexpect.spawn(self.session, maxread=MAX_READ)
         self.child.logfile_read = sys.stdout
 
-        # if console, need to send a return to show the prompt 
-        #self.print_debug_message(\
-        #    'L.pysession.connect.0 - send EOL to clear buffer if any', \
-        #    DEBUG_MSG_VERBOSE)
-
-        #self.sendline(self.EOL)
-
         #
         # 1st send a \r\n, then check 5 possible prompts
         #
@@ -477,8 +470,8 @@ class pysession:
         """
         send an empty newline, the last time of output is full prompt, 
         """
-        keep_debug_level = self.debug_level
-        self.debug_level = 10
+        #keep_debug_level = self.debug_level
+        #self.debug_level = 10
 
         #
         # parse_prompt.1: send an EOL
@@ -526,8 +519,10 @@ class pysession:
                 'L.pysession.parse_prompt: get prompt - [%s]' % \
                 repr(this_prompt), DEBUG_MSG_VERBOSE)
 
-            if this_prompt not in self.prompt_list:
-                self.prompt_list.append(this_prompt)
+            #if this_prompt not in self.prompt_list:
+            #    self.prompt_list.append(this_prompt)
+            self.prompt_list=[this_prompt]
+
         else:
             self.print_debug_message(\
                 'E.pysession.parse_prompt: unexpected hostname/prompt - [%s]'\
@@ -538,7 +533,7 @@ class pysession:
                     % '|'.join(map(repr, self.prompt_list)), 
                 DEBUG_MSG_WARNING)
 
-        self.debug_level = keep_debug_level
+        #self.debug_level = keep_debug_level
 
         return o
     # ----------------------------------------------------------------------- #
@@ -597,7 +592,9 @@ class pysession:
     # ----------------------------------------------------------------------- #
     def set_access_mode(self, mode):
         self.access_mode = mode 
+        #
         self.EOL = CRLF
+        self.EOL = CR
 
         if mode == 'console':
             self.EOL = CR
@@ -614,8 +611,50 @@ class pysession:
         pass
 
     # ----------------------------------------------------------------------- #
-    def transmit(self, commands='', timeout=DEFAULT_SHORT_TIMEOUT, 
-            prompt_change=False, access_mode_after=None):
+    def cmd_change_prompt(self, cmd=''):
+        cmd = cmd.strip().lower()
+
+        # rc 1, rconsole 10, etc, change the prompt
+        if re.match('^rc.*\s\d+', cmd):
+            return True
+
+        # exit
+        if re.match('^ex.*', cmd):
+            return True
+
+        # enable
+        if re.match('^en.*', cmd):
+            return True
+
+        print 'not prompt change!!!'
+        return False
+
+    # ----------------------------------------------------------------------- #
+    def transmit_cmd(self, cmd='', timeout=DEFAULT_SHORT_TIMEOUT):
+        '''
+        transmit one cmd
+        '''
+        if self.cmd_change_prompt(cmd=cmd): 
+            self.child.send(cmd + self.EOL) 
+            _output1 = self.parse_prompt()
+
+            # "rconsole 1", now the access_mode is already changed to 
+            # console, need to update self.access_mode just after cmd
+            #if access_mode_after: 
+            #   self.set_access_mode(access_mode_after)
+
+            # send another EOL, for next expect
+            #self.child.send(self.EOL)
+                
+            # now it is the new prompt
+            i,_output2 = self.expect()
+
+            return i, _output1+_output2 
+        else: 
+            return self.sendline_expect(send=cmd, timeout=timeout)
+
+    # ----------------------------------------------------------------------- #
+    def transmit(self, commands='', timeout=DEFAULT_SHORT_TIMEOUT):
         '''
         transmit commands to device. can be single line or multiple lines
         like:
@@ -642,41 +681,15 @@ class pysession:
                 'L.pysession.transmit.1: L%02d command=[%s]' % 
                 (line_counter, command), DEBUG_MSG_VERBOSE)
 
-            # if prompt expected to be change, 
-            # 1)send; 
-            # 2)parse prompt;
-            # 3) expect
-            if prompt_change:
-                self.child.send(command + self.EOL)
-                _output1 = self.parse_prompt(send_EOL=False)
-
-                # "rconsole 1", now the access_mode is already changed to 
-                # console, need to update self.access_mode just after cmd
-                if access_mode_after: 
-                    self.set_access_mode(access_mode_after)
-
-                # send another EOL, for next expect
-                self.child.send(self.EOL)
-                
-                # now it is the new prompt
-                i,_output2 = self.expect()
-
-                _output = _output1 + _output2
-
-            else: 
-                i, _output = self.sendline_expect(send=command, timeout=timeout)
-
-            # if access_mode changed, update self.access_mode
-            if access_mode_after:
-                self.set_access_mode(access_mode_after)
-                
+            i, _output = self.transmit_cmd(cmd=command, timeout=timeout)
             output += _output
 
         #self.sendline_expect(send='\n', timeout=timeout)
         #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
 
-        return output
+        return i, output
 
+    # ----------------------------------------------------------------------- #
     def close(self):
         self.child.close()
 
@@ -824,31 +837,18 @@ class pys_lib:
         print '\n'
     
 if __name__ == '__main__':
-    #router = pysession(session='interactive')
+    rtr = pysession(session='interactive')
 
-    rtr = pysession(session='telnet 10.18.24.78')
+    #rtr = pysession(session='telnet 10.18.24.78')
     #rtr = pysession(session='telnet 10.31.168.16 3001')
 
     print '\n', '!' * 20, ' end of session establishment ', '!' * 20 
     while True:
-        input = raw_input('\ninput command (enter:exit|;:prompt chg|c:console|t:telnet): ')
-
-        if input.strip() == '':
-            break
+        input = raw_input('\ninput command (^C to exit): ')
 
         print '!' * 10, input, '!' * 10 
 
-        new_mode = ''
-        p_chg = False
-        if input[-2] == ';':
-            input = input[:-2]
-            p_chg = True
-            if input[-1] == 'c':
-                new_mode = 'console'
-            else:
-                new_mode = 'telnet'
-
-        o = rtr.transmit(commands=input,prompt_change=p_chg, access_mode_after=new_mode)
+        i, o = rtr.transmit(commands=input)
 
         print '\n', '-' * 31, 'OUTPUT', '-' * 31
         print o
