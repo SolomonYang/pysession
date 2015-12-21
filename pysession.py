@@ -104,7 +104,7 @@ class pysession:
         #
         # 2. initialize session info
         #
-        if session.lower() == 'interactive':
+        if session.lower() == 'interactive' or session == '':
             self.session, self.user, self.password, self.enable_password\
             = self.get_session_interactive()
         else:
