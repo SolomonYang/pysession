@@ -13,6 +13,7 @@ import sys
 import time
 import getpass
 import pexpect
+import datetime
 
 __device_version__ = '0.1'
 
@@ -28,7 +29,7 @@ CRLF = '\r\n'
 # INIT_PROMPT_LIST: for the prompt parse
 # --------------------------------------------------------------------------- #
 CONNECT_PROMPT_LIST = ['yes/no', 'sername:', 'assword:', '>', '#', '\$']
-INIT_PROMPT_LIST =['#', '>', '\$']
+INIT_PROMPT_LIST =['#', '[^-]>', '\$']
 
 # --------------------------------------------------------------------------- #
 # default values, which can be changed accordingly. For example, all of 
@@ -239,6 +240,10 @@ class pysession:
             # reset self.timeout_counter
             self.timeout_counter = 0
 
+            # clear child.after
+            self.child.after = ''
+            self.child.before= ''
+
             return return_value, total_output
 
         except pexpect.EOF:
@@ -308,7 +313,7 @@ class pysession:
         self.print_debug_message('return output: \n%s' % o, DEBUG_MSG_WARNING)
         self.print_debug_message('%s' % '*'*69, DEBUG_MSG_WARNING)
 
-        return i,o
+        return i, o
 
     # ----------------------------------------------------------------------- #
     def enable(self):
@@ -473,8 +478,8 @@ class pysession:
         """
         send an empty newline, the last time of output is full prompt, 
         """
-        #keep_debug_level = self.debug_level
-        #self.debug_level = 10
+
+        #keep_debug_level = self.debug_level; self.debug_level = 10
 
         #
         # parse_prompt.1: send an EOL
@@ -486,6 +491,8 @@ class pysession:
         else:
             self.print_debug_message(
                 'L.pysession.parse_protmp.1: no EOL send', DEBUG_MSG_VERBOSE)
+
+        time.sleep(1)
 
         #
         # parse_prompt.2: expect one of INIT_PROMPT_LIST #|>|$
@@ -504,7 +511,9 @@ class pysession:
         # host        -> 'telnet@hostname_gw_newyork'
         # prompt_char -> '#'
         #
-        re_prompt_found = re.search('^([^\n]+)([#|>|\$])$', prompt_line)
+        # Avoid Invalid input -> Enable
+        #
+        re_prompt_found = re.search('^([^\n]+[^-])([#|>|\$])$', prompt_line)
 
         if re_prompt_found:
             host, prompt_char = re_prompt_found.groups()
@@ -629,40 +638,45 @@ class pysession:
         if re.match('^en.*', cmd):
             return True
 
-        print 'not prompt change!!!'
         return False
 
     # ----------------------------------------------------------------------- #
-    def transmit_cmd(self, cmd='', timeout=DEFAULT_SHORT_TIMEOUT):
+    def send_line(self, line='', timeout=DEFAULT_SHORT_TIMEOUT):
         '''
-        transmit one cmd
+        send one line 
+        1) if this cmd is expected to change prompt; do
+           * send cmd+EOL
+           * parse new prompt
+           * return combined output
+        2) if not change prompt, just simply sendline_expect
+
+        The difference vs sendline, from here the return value is output only
+        not (index, output)
         '''
-        if self.pprint:
-            print '\n' + pys_lib.pline1(cmd)
+        if self.cmd_change_prompt(cmd=line): 
 
-        if self.cmd_change_prompt(cmd=cmd): 
-            self.child.send(cmd + self.EOL) 
-            _output1 = self.parse_prompt()
+            self.print_debug_message(\
+                'L.pysession.send_line.1: line=[%s], expecting prompt change'\
+                    % line, DEBUG_MSG_VERBOSE)
 
-            # "rconsole 1", now the access_mode is already changed to 
-            # console, need to update self.access_mode just after cmd
-            #if access_mode_after: 
-            #   self.set_access_mode(access_mode_after)
+            self.child.send(line + self.EOL) 
+            _output = self.parse_prompt()
 
-            # send another EOL, for next expect
-            #self.child.send(self.EOL)
-                
-            # now it is the new prompt
-            i,_output2 = self.expect()
-
-            return i, _output1+_output2 
+            # combine output
+            i, _o = self.expect()
+            _output += _o
         else: 
-            return self.sendline_expect(send=cmd, timeout=timeout)
+            i, _output = self.sendline_expect(send=line, timeout=timeout)
+
+        if self.pprint: 
+            print '\n' + pys_lib.pline1(line)
+
+        return _output
 
     # ----------------------------------------------------------------------- #
-    def transmit(self, commands='', timeout=DEFAULT_SHORT_TIMEOUT):
+    def send(self, lines='', timeout=DEFAULT_SHORT_TIMEOUT):
         '''
-        transmit commands to device. can be single line or multiple lines
+        transmit lines to device. can be single line or multiple lines
         like:
         single line of cmd
         --------------------------------
@@ -681,19 +695,19 @@ class pysession:
         output = ''
         line_counter = 1
 
-        for command in commands.split('\n'):
+        for line in lines.split('\n'):
             line_counter += 1
             self.print_debug_message(\
-                'L.pysession.transmit.1: L%02d command=[%s]' % 
-                (line_counter, command), DEBUG_MSG_VERBOSE)
+                'L.pysession.transmit.1: #%02d line=[%s]' % 
+                (line_counter, line), DEBUG_MSG_VERBOSE)
 
-            i, _output = self.transmit_cmd(cmd=command, timeout=timeout)
+            _output = self.send_line(line=line, timeout=timeout)
             output += _output
 
         #self.sendline_expect(send='\n', timeout=timeout)
         #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
 
-        return i, output
+        return output
 
     # ----------------------------------------------------------------------- #
     def close(self):
@@ -869,10 +883,11 @@ class pys_lib:
         return '%s\n!%s%s%s\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), '!'*80)
 
 if __name__ == '__main__':
-    rtr = pysession(session='interactive')
-
+    #rtr = pysession(session='interactive')
     #rtr = pysession(session='telnet 10.18.24.78')
-    #rtr = pysession(session='telnet 10.31.168.16 3001')
+    rtr = pysession(session='telnet 10.31.168.16 3001')
+    
+    rtr.pprint = True
 
     print '\n', '!' * 20, ' end of session establishment ', '!' * 20 
     while True:
@@ -880,9 +895,9 @@ if __name__ == '__main__':
 
         print '!' * 10, input, '!' * 10 
 
-        i, o = rtr.transmit(commands=input)
+        o = rtr.send(lines=input)
 
-        print '\n', '-' * 31, 'OUTPUT', '-' * 31
+        print '\n', '+' * 35, 'OUTPUT', '+' * 35
         print o
         print '=' * 80
 
