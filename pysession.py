@@ -13,7 +13,7 @@ import sys
 import time
 import getpass
 import pexpect
-import datetime
+from datetime import datetime
 
 __device_version__ = '0.1'
 
@@ -55,7 +55,7 @@ DEBUG_MSG_INFO    = 2
 DEBUG_MSG_ERROR   = 1
 DEBUG_MSG_CRITICAL= 0
 
-DEFAULT_DEBUG_LEVEL = 0
+DEFAULT_DEBUG_LEVEL = DEBUG_MSG_INFO
 
 # --------------------------------------------------------------------------- #
 class pysession:
@@ -89,11 +89,14 @@ class pysession:
         #
         self.prompt_line = None
         self.timeout_counter = 0
-        self.timeout_max_allowed = 1
+        self.timeout_max_allowed = 5
 
         self.device_type = device_type
         self.device_os = device_os
         self.device_version = device_version
+
+        self.debug_dest_to_me = False
+        self.EOL = CRLF
 
         # print each cmd in pretty line formate
         self.pprint = False
@@ -117,16 +120,18 @@ class pysession:
                 self.enable_password])
 
         # parse the session, if not valid session info, exit
-        self.session_valid, access_mode, self.access_protocol, self.hostname,\
-            _user = self.parse_session()
+        self.session_valid, self.access_mode, self.access_protocol, \
+            self.hostname, _user = self.parse_session()
+
+        self.log_file_name = 'pys__' + self.hostname + '__' + \
+            datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
+
+        sys.stdout = pys_logger(self.log_file_name)
 
         # if session is ssh, update the self.user
         if _user != '':
             self.user = _user
 
-        # reset self.access_mode
-        self.set_access_mode(mode=access_mode)
-        
         #
         # prompt_list is set when session established, sth like
         # hostname_device_local[^\n]#. And this can be expanded as
@@ -167,10 +172,11 @@ class pysession:
         str += pys_lib.pys_pprint(
             ['session', 'user', 'device_type', 'device_os', \
              'device_version', 'output before', 'output after', 'EOL', \
-             'access'],
+             'access', 'log_file'],
             [self.session, self.user, self.device_type, self.device_os,\
              self.device_version,repr(self.child.before), \
-             repr(self.child.after),repr(self.EOL), self.access_mode],
+             repr(self.child.after),repr(self.EOL), self.access_mode, \
+             self.log_file_name],
             action="str")
         return str
 
@@ -227,8 +233,8 @@ class pysession:
             prompt_list = INIT_PROMPT_LIST
 
         self.print_debug_message(\
-            'L.pysession.expect.1: final prompt_list = \n%s'\
-            % ':::::'.join(map(repr, prompt_list)), DEBUG_MSG_VERBOSE)
+            '\nL.pysession.expect.1: final prompt_list = %s'\
+            % ' | '.join(prompt_list), DEBUG_MSG_VERBOSE)
 
         try:
             #
@@ -236,13 +242,17 @@ class pysession:
             #
             return_value = self.child.expect(prompt_list, timeout=timeout)
             total_output = self.child.before + self.child.after
+            self.print_debug_message(\
+                '\nL.pysession.expect.2: retval=%d\nbefore:%s\nafter:%s'\
+                % (return_value, self.child.before, self.child.after,), \
+                DEBUG_MSG_VERBOSE)
 
             # reset self.timeout_counter
             self.timeout_counter = 0
 
             # clear child.after
-            self.child.after = ''
-            self.child.before= ''
+            #self.child.after = ''
+            #self.child.before= ''
 
             return return_value, total_output
 
@@ -250,13 +260,18 @@ class pysession:
             #
             # EOF: session tear down
             #
-            self.print_debug_message('Received EOF', DEBUG_MSG_ERROR)
+            self.print_debug_message('L.pysession.expect.2: Received EOF',\
+                DEBUG_MSG_ERROR)
 
         except pexpect.TIMEOUT:
             #
             # Timeout: increase counter and try max_allow_timeout times
             # to get new prompt
             #
+            self.print_debug_message(\
+                '\nL.pysession.expect.2: TIMEOUT\nbefore:\n%s\nafter:\n%s'\
+                % (self.child.before, self.child.after,), \
+                DEBUG_MSG_VERBOSE)
 
             # increment self.timeout_counter by 1
             self.timeout_counter += 1
@@ -277,7 +292,8 @@ class pysession:
                 self.print_debug_message('*'*60, DEBUG_MSG_VERBOSE)
 
         # print detailed debug 
-        self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
+        #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
+        self.print_debug_message(str(self.child), 0)
 
         return -1, ''
 
@@ -452,6 +468,8 @@ class pysession:
             # prompt '$' means it is a router
             self.device_type = 'pc'
 
+        self.parse_prompt()
+
         self.print_debug_message(\
             'L.pysession.connect(): successfully login router', \
             DEBUG_MSG_ERROR)
@@ -487,12 +505,10 @@ class pysession:
         if send_EOL: 
             self.child.send(self.EOL) 
             self.print_debug_message(
-                'L.pysession.parse_protmp.1: send an EOL', DEBUG_MSG_VERBOSE)
+                'L.pysession.parse_prompt.1: send an EOL', DEBUG_MSG_VERBOSE)
         else:
             self.print_debug_message(
-                'L.pysession.parse_protmp.1: no EOL send', DEBUG_MSG_VERBOSE)
-
-        time.sleep(1)
+                'L.pysession.parse_prompt.1: no EOL send', DEBUG_MSG_VERBOSE)
 
         #
         # parse_prompt.2: expect one of INIT_PROMPT_LIST #|>|$
@@ -542,7 +558,7 @@ class pysession:
 
         self.print_debug_message(\
                 'D.pysession.parse_prompt: promplist: %s'\
-                    % '|'.join(map(repr, self.prompt_list)), 
+                    % '|'.join(map(repr, map(repr,self.prompt_list))), 
                 DEBUG_MSG_WARNING)
 
         #self.debug_level = keep_debug_level
@@ -560,7 +576,7 @@ class pysession:
         if self.device_type == 'router' or self.device_type == 'switch':
             self.page_off()
 
-        self.parse_prompt()
+        #self.parse_prompt()
 
     # ----------------------------------------------------------------------- #
     def parse_session(self):
@@ -602,14 +618,35 @@ class pysession:
         return False, '', '', '', ''
 
     # ----------------------------------------------------------------------- #
-    def set_access_mode(self, mode):
-        self.access_mode = mode 
-        #
-        self.EOL = CRLF
-        self.EOL = CR
+    def set_debug_dest_to_me(self):
+        if self.debug_dest_to_me:
+            return
+        
+        self.debug_dest_to_me = True
 
-        if mode == 'console':
-            self.EOL = CR
+        output = self.send('show who')
+
+        session = ''
+        session_num = ''
+
+        for line in output.split('\n'):
+            # search for (Console|Telnet|SSH) connections
+            re_conn = re.match('^(Console|Telnet|SSH) connections', line)
+            if re_conn: 
+                session = re_conn.group(1)
+                        
+            # search for  [ 1      established,.*]
+            re_conn_num = re.match('^\s+(\d+)\s+established,', line)
+            if re_conn_num:
+                session_num = re_conn_num.group(1)
+
+
+            # search for         you are connecting to this session
+            re_you_conn = re.match('^\s+you are connecting to this session', line)
+            if re_you_conn:
+                break
+
+        self.send('debug destination %s %s' % (session, session_num))
         
     # ----------------------------------------------------------------------- #
     def collect_sysinfo(self):
@@ -653,23 +690,26 @@ class pysession:
         The difference vs sendline, from here the return value is output only
         not (index, output)
         '''
+        line = line.strip()
+
+        if self.pprint: 
+            print '\n' + pys_lib.pline1('!!!CMD:%s!!!' % line)
+
         if self.cmd_change_prompt(cmd=line): 
 
             self.print_debug_message(\
                 'L.pysession.send_line.1: line=[%s], expecting prompt change'\
                     % line, DEBUG_MSG_VERBOSE)
 
-            self.child.send(line + self.EOL) 
+            #self.child.send(line + self.EOL) 
+            self.child.send(line)
             _output = self.parse_prompt()
 
-            # combine output
-            i, _o = self.expect()
-            _output += _o
         else: 
-            i, _output = self.sendline_expect(send=line, timeout=timeout)
+            if re.search('^deb', line.strip()):
+                self.set_debug_dest_to_me()
 
-        if self.pprint: 
-            print '\n' + pys_lib.pline1(line)
+            i, _output = self.sendline_expect(send=line, timeout=timeout)
 
         return _output
 
@@ -712,6 +752,24 @@ class pysession:
     # ----------------------------------------------------------------------- #
     def close(self):
         self.child.close()
+
+# --------------------------------------------------------------------------- #
+class pys_logger:
+    """
+    local logger module, with this we can output to 2 stdout and pysession
+    log file
+    """
+    def __init__(self, log_file_name="pys_log_file"):
+        self.terminal = sys.stdout
+        self.log = open(log_file_name, 'a')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 # --------------------------------------------------------------------------- #
 class pys_lib:
@@ -841,7 +899,7 @@ class pys_lib:
     
     # ----------------------------------------------------------------------- #
     @staticmethod
-    def psleep(num_sec):
+    def psleep(num_sec, reason=''):
         """
         pretty sleep
         """
@@ -849,25 +907,28 @@ class pys_lib:
         if num_sec < 0:
             return 0
     
-        print '\nsleeping %d seconds:' % num_sec
+        print pys_lib.pline2('sleeping %d seconds: %s' % (num_sec, reason))
         for i in range(num_sec):
             if i % 10 == 0:
-                print '\nsec:%4d' % i,
+                print 'sec:%4d' % i,
             time.sleep(1)
             print '.',
             sys.stdout.flush()
-        print '\n'
+
+            if i % 10 == 9:
+                print '\n',
+        print pys_lib.pline2('\n END of sleeping %d seconds ' % num_sec)
     
     # ----------------------------------------------------------------------- #
     @staticmethod
     def pline1(line): 
         """
         pline1 - pretty line 1
-        !!!!!!!!!!!!!!!!!!!! LINE !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        >>>>>>>>>>>>>>>>>>>>>>>>> LINE <<<<<<<<<<<<<<<<<<<<<<<< 
         """
         l = len(line) 
-        ll= (78-l)/2 
-        return '%s %s %s' % ('!'*ll, line, '!'*(78-l-ll))
+        ll= (76-l)/2 
+        return '%s  %s  %s' % ('>'*ll, line, '<'*(76-l-ll))
 
     # ----------------------------------------------------------------------- #
     @staticmethod
@@ -880,7 +941,7 @@ class pys_lib:
         """
         l = len(line) 
         ll= (78-l)/2 
-        return '%s\n!%s%s%s\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), '!'*80)
+        return '\n%s\n!%s%s%s\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), '!'*80)
 
 if __name__ == '__main__':
     #rtr = pysession(session='interactive')
