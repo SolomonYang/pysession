@@ -15,9 +15,9 @@ import getpass
 import pexpect
 from datetime import datetime
 
-__device_version__ = '0.1'
+__device_version__ = '0.2'
 
-MAX_READ = 163840
+MAX_READ = 327680
 
 CR = '\r'
 LF = '\n'
@@ -28,7 +28,7 @@ CRLF = '\r\n'
 # CONNECT_PROMPT_LIST: for init connect() use, 
 # INIT_PROMPT_LIST: for the prompt parse
 # --------------------------------------------------------------------------- #
-CONNECT_PROMPT_LIST = ['yes/no', 'sername:', 'assword:', '>', '#', '\$']
+CONNECT_PROMPT_LIST = ['yes/no', 'ame:', 'assword:', '>', '#', '\$']
 INIT_PROMPT_LIST =['#', '[^-]>', '\$']
 
 # --------------------------------------------------------------------------- #
@@ -43,7 +43,7 @@ INIT_PROMPT_LIST =['#', '[^-]>', '\$']
 DEFAULT_USERNAME = ''
 DEFAULT_PASSWORD = ''
 DEFAULT_ENABLE_PASSWORD = ''
-DEFAULT_SHORT_TIMEOUT = 60
+DEFAULT_SHORT_TIMEOUT = 120
 DEFAULT_DEVICE_TYPE = 'router'
 
 # --------------------------------------------------------------------------- #
@@ -55,6 +55,7 @@ DEBUG_MSG_INFO    = 2
 DEBUG_MSG_ERROR   = 1
 DEBUG_MSG_CRITICAL= 0
 
+DEFAULT_DEBUG_LEVEL = DEBUG_MSG_VERBOSE
 DEFAULT_DEBUG_LEVEL = DEBUG_MSG_INFO
 
 # --------------------------------------------------------------------------- #
@@ -82,12 +83,16 @@ class pysession:
                  device_type=DEFAULT_DEVICE_TYPE, 
                  device_os='', 
                  device_version='', 
+                 output_file='',
+                 log_file_prefix='pys__', 
+                 timeout=DEFAULT_SHORT_TIMEOUT,
                  debug_level=DEFAULT_DEBUG_LEVEL):
 
         #
         # 1. initialize internal variables
         #
         self.prompt_line = None
+        self.timeout = timeout
         self.timeout_counter = 0
         self.timeout_max_allowed = 5
 
@@ -104,6 +109,16 @@ class pysession:
         # debug level, the higher, the more verbose, default is 0, which 
         # means none debug
         self.debug_level = debug_level
+
+        self.pys_parser = PYSParser()
+
+        # counters of commands
+        self.counter_line = 0
+        self.counter_cmd = 0
+        self.counter_invalid_cmd = 0
+
+        self.start_time = time.time()
+        self.sleep_time = 0
 
         #
         # 2. initialize session info
@@ -123,10 +138,16 @@ class pysession:
         self.session_valid, self.access_mode, self.access_protocol, \
             self.hostname, _user = self.parse_session()
 
-        self.log_file_name = 'pys__' + self.hostname + '__' + \
-            datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
+        # if ssh, self.EOL='\n'
+        if self.access_protocol == 'ssh':
+            self.EOL = LF
 
-        sys.stdout = pys_logger(self.log_file_name)
+        self.log_file_name = output_file
+        if self.log_file_name == '': 
+            self.log_file_name = log_file_prefix + self.hostname + '__' + \
+                datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
+
+        sys.stdout = PYSLogger(self.log_file_name)
 
         # if session is ssh, update the self.user
         if _user != '':
@@ -169,7 +190,7 @@ class pysession:
     # ----------------------------------------------------------------------- #
     def __str__(self):
         str = '\n----------- pysession Details -----------\n'
-        str += pys_lib.pys_pprint(
+        str += PYSLib.pys_pprint(
             ['session', 'user', 'device_type', 'device_os', \
              'device_version', 'output before', 'output after', 'EOL', \
              'access', 'log_file'],
@@ -218,8 +239,8 @@ class pysession:
         return self.child.send(real_send)
 
     # ----------------------------------------------------------------------- #
-    def expect(self, prompt_list=[], timeout=DEFAULT_SHORT_TIMEOUT,
-            looking_for_prompt=True):
+    def expect(self, prompt_list=[], timeout=DEFAULT_SHORT_TIMEOUT, 
+        looking_for_prompt=True):
         """
         local expect wrapper with common exception handling
         """
@@ -232,16 +253,39 @@ class pysession:
         if prompt_list == []:
             prompt_list = INIT_PROMPT_LIST
 
+        _prompt_list = prompt_list + [\
+            r'--More--, next page: Space', \
+            r'--More--, page: Space, nopage']
+
         self.print_debug_message(\
-            '\nL.pysession.expect.1: final prompt_list = %s'\
-            % ' | '.join(prompt_list), DEBUG_MSG_VERBOSE)
+            '\nL.pysession.expect.1: final prompt_list = %s\n'\
+            % '\n'.join(map(repr, _prompt_list)), DEBUG_MSG_VERBOSE)
 
         try:
-            #
-            # if everyting works well, return index, sum of output
-            #
-            return_value = self.child.expect(prompt_list, timeout=timeout)
-            total_output = self.child.before + self.child.after
+            page_break = True 
+
+            while page_break: 
+                return_value = self.child.expect(_prompt_list, \
+                    timeout=timeout) 
+                
+                total_output = self.child.before + self.child.after 
+
+                # return_value = last 2, means that seeing
+                # r'--More--, next page: Space', 
+                # r'--More--, page: Space, nopage']
+                page_break = (return_value >= (len(_prompt_list)-1))
+                if page_break: 
+                    self.child.send(' ') 
+                    self.print_debug_message(\
+                        '\nL.pysession.expect.2: page break')
+
+                # get Password:, send self.enable_password
+                #r'assword', \
+                #if return_value == len(_prompt_list) - 2:
+                #    self.child.sendline(self.enable_password) 
+                #    self.print_debug_message(\
+                #        '\nL.pysession.expect.2: page break')
+
             self.print_debug_message(\
                 '\nL.pysession.expect.2: retval=%d\nbefore:%s\nafter:%s'\
                 % (return_value, self.child.before, self.child.after,), \
@@ -251,8 +295,8 @@ class pysession:
             self.timeout_counter = 0
 
             # clear child.after
-            #self.child.after = ''
-            #self.child.before= ''
+            self.child.after = ''
+            self.child.before= ''
 
             return return_value, total_output
 
@@ -298,8 +342,7 @@ class pysession:
         return -1, ''
 
     # ----------------------------------------------------------------------- #
-    def sendline_expect(self, send='', prompt_list=[], mode='nostrip',
-        timeout=DEFAULT_SHORT_TIMEOUT):
+    def sendline_expect(self, send='', prompt_list=[], mode='nostrip'):
         """
         local expect wrapper to combine 2 pexpect procedure sendline and 
         expect with common exception handling
@@ -315,13 +358,17 @@ class pysession:
         self.print_debug_message("L.pysession.sendline_expect(), send:[%s]" \
             % repr(send), DEBUG_MSG_VERBOSE)
 
-        self.sendline(send)
+        if send != '': 
+            self.sendline(send)
 
         # if no given prompt_list, use the default self.prompt_list
         if prompt_list == []:
+            #print '***************************'
+            #print 'self.prompt_list', self.prompt_list
+            #print '***************************'
             prompt_list = self.prompt_list
 
-        i, o = self.expect(prompt_list, timeout)
+        i, o = self.expect(prompt_list=prompt_list)
 
         self.print_debug_message('\n%s L.pysession.sendline_expect %s' % \
             ('*'*20, '*'*20), DEBUG_MSG_WARNING)
@@ -354,6 +401,10 @@ class pysession:
         # receive P|password to ask for enable_password
         #
         elif index == 1: 
+            if self.enable_password == '':
+                self.enable_password = \
+                    getpass.getpass('please provide enable password :')
+
             index2, output = self.sendline_expect(self.enable_password, ['#']) 
                 
             if index2 == 0: 
@@ -383,8 +434,12 @@ class pysession:
             'L.pysession.connect.1 - send EOL to expect return:\n%s' % \
             '_____'.join(CONNECT_PROMPT_LIST), DEBUG_MSG_VERBOSE)
 
-        index, o = self.sendline_expect(send=self.EOL, 
-            prompt_list=CONNECT_PROMPT_LIST)
+        if self.access_mode == 'ssh':
+            index, o = self.sendline_expect(send='',
+                prompt_list=CONNECT_PROMPT_LIST)
+        else:
+            index, o = self.sendline_expect(send=self.EOL, 
+                prompt_list=CONNECT_PROMPT_LIST)
 
         self.print_debug_message(\
             'L.pysession.connect.2 - get indexed return %d' % index, \
@@ -423,10 +478,20 @@ class pysession:
                 'I.pysession.connect.2: being asked for passoword',
                 DEBUG_MSG_INFO)
 
+            if self.password == '':
+                self.password = \
+                    getpass.getpass('please provide login password: ')
+                
+            #self.child.after = ''
+            #self.child.before= ''
+
             index, o = self.sendline_expect(self.password, 
                 prompt_list=CONNECT_PROMPT_LIST)
 
+            #CONNECT_PROMPT_LIST = ['yes/no', 'ame:', 'assword:', '>', '#', '\$']
             if index < 3:
+                #print index
+                #print '[', o ,']'
                 self.print_debug_message(\
                 'E.I.pysession.connect.2: password error', DEBUG_MSG_ERROR)
                 return -1
@@ -606,9 +671,17 @@ class pysession:
         if re_telnet_found:
             return True, 'telnet', 'telnet', re_telnet_found.group(1), ''
 
-        re_ssh_found = re.search('^ssh\s+-l\s+(\S+)\s+(\S+)$', self.session)
-        if re_telnet_found:
-            return True, 'ssh', 'ssh', re_ssh_found.group(2), re_ssh_found(1)
+        # 'ssh -oKexAlgorithms=+diffie-hellman-group1-sha1 -l admin 10.17.146.21'
+        re_ssh_found1 = re.search('^ssh\s+.*-l\s+(\S+)\s+(\S+)$', self.session)
+        if re_ssh_found1:
+            return True, 'ssh', 'ssh', re_ssh_found1.group(2), \
+                re_ssh_found1.group(1)
+
+        # 'ssh -oKexAlgorithms=+diffie-hellman-group1-sha1 admin@10.17.146.21'
+        re_ssh_found2 = re.search('^ssh\s+.*\s+(\S+)@(\S+)$', self.session)
+        if re_ssh_found2:
+            return True, 'ssh', 'ssh', re_ssh_found2.group(2), \
+                re_ssh_found1.group(1)
 
         re_console_found = re.search('^telnet\s+(\S+)\s+(\d+)$', self.session)
         if re_console_found:
@@ -624,7 +697,7 @@ class pysession:
         
         self.debug_dest_to_me = True
 
-        output = self.send('show who')
+        output = self.send_line('show who')
 
         session = ''
         session_num = ''
@@ -646,7 +719,7 @@ class pysession:
             if re_you_conn:
                 break
 
-        self.send('debug destination %s %s' % (session, session_num))
+        self.send_line('debug destination %s %s' % (session, session_num))
         
     # ----------------------------------------------------------------------- #
     def collect_sysinfo(self):
@@ -663,8 +736,11 @@ class pysession:
     def cmd_change_prompt(self, cmd=''):
         cmd = cmd.strip().lower()
 
-        # rc 1, rconsole 10, etc, change the prompt
-        if re.match('^rc.*\s\d+', cmd):
+        # rconsol command change the prompt, like
+        # rconsole
+        # rc 1
+        # rconsole 10
+        if re.match('^rc.*', cmd):
             return True
 
         # exit
@@ -675,25 +751,35 @@ class pysession:
         if re.match('^en.*', cmd):
             return True
 
+        # dm monitor
+        if re.match('^dm mon', cmd):
+            return True
+
         return False
 
     # ----------------------------------------------------------------------- #
-    def send_line(self, line='', timeout=DEFAULT_SHORT_TIMEOUT):
+    def send_line(self, line=''):
         '''
-        send one line 
-        1) if this cmd is expected to change prompt; do
+        Wrapper of pexpect.sendline(), but with 2 adds-on:
+        =====================================================================
+        1. send single line of cmd to router (multiple lines have been 
+           splitted by pysession.send()) and return value is purely output
+           from here instead of (index, output)
+           1) if this cmd is expected to change prompt; do
            * send cmd+EOL
            * parse new prompt
-           * return combined output
-        2) if not change prompt, just simply sendline_expect
+           * return combined output 
+           2) if not change prompt, just simply sendline_expect
 
-        The difference vs sendline, from here the return value is output only
-        not (index, output)
+        2. special commands for pysession, now we support
+           - !DO: sleep \d+ [min|sec].* 
+             * sleep <n> min/sec
+             * send an empty return to fetech output, like debug
         '''
-        line = line.strip()
+        self.counter_cmd += 1
 
-        if self.pprint: 
-            print '\n' + pys_lib.pline1('!!!CMD:%s!!!' % line)
+        if self.pprint and line[0]!='!':
+            print '\n' + PYSLib.pline1('!!!CMD:%s!!!' % line)
 
         if self.cmd_change_prompt(cmd=line): 
 
@@ -701,52 +787,99 @@ class pysession:
                 'L.pysession.send_line.1: line=[%s], expecting prompt change'\
                     % line, DEBUG_MSG_VERBOSE)
 
-            #self.child.send(line + self.EOL) 
-            self.child.send(line)
+            # enable 
+            if re.match('^en.*', line):
+                if self.enable() == -1:
+                    self.print_debug_message('send_line: failed to enter \
+                        enable mode', 2)
+            else: 
+                #self.child.send(line + self.EOL) 
+                self.child.send(line)
+
             _output = self.parse_prompt()
 
         else: 
             if re.search('^deb', line.strip()):
                 self.set_debug_dest_to_me()
 
-            i, _output = self.sendline_expect(send=line, timeout=timeout)
+            i, _output = self.sendline_expect(send=line)
+
+        if re.search('nvalid input|yntax error', _output):
+            self.counter_invalid_cmd += 1
 
         return _output
 
-    # ----------------------------------------------------------------------- #
-    def send(self, lines='', timeout=DEFAULT_SHORT_TIMEOUT):
+    def _send(self, lines=''):
         '''
-        transmit lines to device. can be single line or multiple lines
-        like:
-        single line of cmd
-        --------------------------------
-        router.transmit("show ver")
-        --------------------------------
+        internal send function behind self.send(). no cmd parse, send line
+        to device one by one because pys_parser may convert one line to 
+        multiple lines
+        '''
+        output = ''
 
-        or multiple line of cmd
-        --------------------------------
-        router.transmit("""
+        for line in lines.split('\n'):
+            # update counter_cmd +1
+            self.counter_cmd += 1
+
+            # send cmd to device and accumulate the output
+            output += self.send_line(line=line)
+
+        return output
+    # ----------------------------------------------------------------------- #
+    def send(self, lines='', count_line=True):
+        '''
+        Method to send input to device, we have 3 types of input which 
+        specified in argument lines.
+        1) single line of cmd, like
+        router.send("show ver")
+
+        2) multiple lines of cmd, like
+        router.send("""
             conf term
             inter ve 1
             ip address 1.1.1.1/24
             """)
-        --------------------------------
+
+        3) special commands for pysession
         '''
         output = ''
-        line_counter = 1
 
         for line in lines.split('\n'):
-            line_counter += 1
-            self.print_debug_message(\
-                'L.pysession.transmit.1: #%02d line=[%s]' % 
-                (line_counter, line), DEBUG_MSG_VERBOSE)
+            # skip empty lines
+            if line.strip() == '':
+                continue
+            
+            # update counter_line by +1
+            if count_line: 
+                self.counter_line += 1
 
-            _output = self.send_line(line=line, timeout=timeout)
-            output += _output
+            # get the real cmd by parser (pys cmd will handled by parser)
+            real_cmd = self.pys_parser.parse(cmd=line)
+            
+            #print 'pysession.send(): real_cmd-->', real_cmd
 
-        #self.sendline_expect(send='\n', timeout=timeout)
+            re_set_timeout = re.search('!PYSCmdSetTimeout (\d+)', real_cmd)
+            re_sleep = re.search('!PYSCmdSleep (\d+)', real_cmd)
+
+            if re_set_timeout:
+                #set timeout value
+                self.timeout = re_set_timeout.group(0)
+            elif re_sleep:
+                sleep_sec = int(re_sleep.group(1))
+                PYSLib.psleep(sleep_sec, pprint=False) 
+                self.sleep_time += sleep_sec
+            elif real_cmd == '!PYSCmdSetDebguDest':
+                # set debug destination to me
+                self.set_debug_dest_to_me()
+            elif len(real_cmd.split('\n')) > 1:
+                # if receive multiple lines of cmd, from LOOP..LOOPEND
+                # self.send() but with count_line=False
+                output += self.send(lines=real_cmd, count_line=False)
+            else: 
+                # send line to device and accumulate the output 
+                output += self.send_line(line=real_cmd)
+
         #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
-
         return output
 
     # ----------------------------------------------------------------------- #
@@ -754,14 +887,129 @@ class pysession:
         self.child.close()
 
 # --------------------------------------------------------------------------- #
-class pys_logger:
+class PYSValue:
+    """
+    Module to keep values
+    """
+    def __init__(self):
+        self.dict_value = {}
+
+    def set_value(self, variable='', value=None):
+        '''
+        set variable/value dict pair like
+        pv.set_value(variable='$Prefix1', value='193.240.87.3')
+        '''
+        self.dict_value[variable] = value
+
+    def apply_value(self, line=''):
+        '''
+        replace $variable in line
+        '''
+        pass
+
+# --------------------------------------------------------------------------- #
+class PYSParser:
+    """
+    Command parser for each line sending to device. Now supporting:
+
+    5 DO commands:
+    1) !DO LOOP <n> 
+    2) !DO ENDLOOP
+    3) !DO SLEEP <N> SECONDS
+    4) !DO SET DEBUG DEST
+    5) !DO SET TIMEOUT 300
+
+    6 GET commands:
+    1) !GET $dest:input BY PYSLib:get_input WITH message:"please provide the dest ip of issue prefix"
+    """
+    def __init__(self):
+        # used for !DO LOOP 10....!DO ENDLOOP
+        self.record_cmd_mode = False
+        self.loop_times = 0
+        self.list_record_cmd = []
+
+    def parse(self, cmd=''):
+        cmdline = cmd.strip().lower() 
+
+        #
+        # !DO LOOP 10
+        #
+        re_loop = re.match(r'^!do\s+loop\s+(\d+).*', cmdline)
+        if re_loop: 
+            self.record_cmd_mode = True
+            self.loop_times = int(re_loop.group(1))
+            self.list_record_cmd = []
+            return '!!!!! START TO RECORD CMDS !!!!!!!'
+
+        #
+        # !DO ENDLOOP
+        #
+        re_endloop = re.match('^\!do\s+endloop.*', cmdline)
+        if re_endloop: 
+            self.record_cmd_mode = False
+            ret_list_cmds = '\n'.join(self.list_record_cmd)
+            ret_cmds = '!!!!!!!!!!!! END OF RECORD CMDS !!!!!!!!!!!!\n'
+            ret_cmds += '!\n'
+            ret_cmds += '!\n'
+            ret_cmds += '!!!!!!!!!!!! START OF LOOP EXECUTION !!!!!!!!!!!!\n'
+
+            for i in range(self.loop_times):
+                ret_cmds += '!!!!! LOOP No.%d !!!!!\n' % i
+                ret_cmds += '\n'.join(self.list_record_cmd)
+                ret_cmds += '\n'
+            ret_cmds += '!!!!!!!!!!!! END OF LOOP EXECUTION !!!!!!!!!!!!\n'
+                
+            self.list_record_cmd = []
+
+            return ret_cmds
+
+        #
+        # Inside LOOP, just show and record the cmd, will send them together
+        # later when seeing "!DO ENDLOOP"
+        #
+        if self.record_cmd_mode:
+            self.list_record_cmd.append(cmdline)
+            return '!!!!! RECORD No.%d CMD: %s' % (len(self.list_record_cmd), cmdline)
+
+        #
+        # !DO sleep 100 seconds
+        #
+        re_sleep = re.match(r'^!do\s+sleep\s+(\d+)\s+sec.*', cmdline)
+        if re_sleep:
+            return '!PYSCmdSleep %s' % re_sleep.group(1)
+
+        #
+        # !DO SET DEBUG DEST
+        #
+        re_set_debug_dest = re.match(r'^!do\s+set\s+debug\s+dest.*', cmdline)
+        if re_set_debug_dest:
+            return '!PYSCmdSetDebguDest'
+        #
+        # !DO SET TIMEOUT 60 seconds
+        #
+        re_set_timeout = re.match(r'^!do\s+set\s+timeout(\s+).*', cmdline)
+        if re_set_timeout:
+            return '!PYSCmdSetTimeout %d' % re_set_timeout.group(1)
+
+        #
+        # !GET
+        # return this cmd back to pysession to handle
+        #
+        re_get = re.match(r'^!get\s+set\s+timeout(\s+).*', cmdline)
+        if re_get:
+            return '!PYSCmdGet %s' % cmd
+
+        return cmdline
+
+# --------------------------------------------------------------------------- #
+class PYSLogger:
     """
     local logger module, with this we can output to 2 stdout and pysession
     log file
     """
     def __init__(self, log_file_name="pys_log_file"):
         self.terminal = sys.stdout
-        self.log = open(log_file_name, 'a')
+        self.log = open(log_file_name, 'w')
 
     def write(self, message):
         self.terminal.write(message)
@@ -772,7 +1020,7 @@ class pys_logger:
         self.log.flush()
 
 # --------------------------------------------------------------------------- #
-class pys_lib:
+class PYSLib:
     """
     local shared library for pysession, 3 static methods:
     1) pys_pprint(list_name, list_value): 
@@ -786,8 +1034,15 @@ class pys_lib:
 
     4) psleep(seconds):
        wrappter of time.sleep(), print out '.' for each second, so 
+
+    5) get_input(message=''):
+       wrapper of raw_input(), return dict {input=$input}
     """ 
    
+    # ----------------------------------------------------------------------- #
+    def get_input(self, message):
+        return {'input':raw_input(message)}
+
     # ----------------------------------------------------------------------- #
     @staticmethod
     def pys_pprint(list_name, list_value, action='print'): 
@@ -899,15 +1154,19 @@ class pys_lib:
     
     # ----------------------------------------------------------------------- #
     @staticmethod
-    def psleep(num_sec, reason=''):
+    def psleep(num_sec, reason='', pprint='True'):
         """
         pretty sleep
         """
     
         if num_sec < 0:
             return 0
-    
-        print pys_lib.pline2('sleeping %d seconds: %s' % (num_sec, reason))
+   
+        if pprint: 
+            print PYSLib.pline2('sleeping %d seconds: %s' % (num_sec, reason))
+        else:
+            print '\n'
+
         for i in range(num_sec):
             if i % 10 == 0:
                 print 'sec:%4d' % i,
@@ -917,7 +1176,9 @@ class pys_lib:
 
             if i % 10 == 9:
                 print '\n',
-        print pys_lib.pline2('\n END of sleeping %d seconds ' % num_sec)
+        
+        if pprint: 
+            print PYSLib.pline2('END of sleeping %d seconds' % num_sec)
     
     # ----------------------------------------------------------------------- #
     @staticmethod
