@@ -685,7 +685,7 @@ class pysession:
         re_ssh_found2 = re.search('^ssh\s+.*\s+(\S+)@(\S+)$', self.session)
         if re_ssh_found2:
             return True, 'ssh', 'ssh', re_ssh_found2.group(2), \
-                re_ssh_found1.group(1)
+                re_ssh_found2.group(1)
 
         re_console_found = re.search('^telnet\s+(\S+)\s+(\d+)$', self.session)
         if re_console_found:
