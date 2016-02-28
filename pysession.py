@@ -15,7 +15,7 @@ import getpass
 import pexpect
 from datetime import datetime
 
-__device_version__ = '0.2'
+__version__ = '0.2'
 
 MAX_READ = 327680
 
@@ -463,6 +463,10 @@ class pysession:
         if index == 1:
             self.print_debug_message('connect_1: be asked for user', 2)
 
+            if self.user == '':
+                self.user = \
+                    getpass.getpass('please provide login id: ')
+                
             index, o = self.sendline_expect(self.user, 
                 ['yes/no', 'sername:', 'assword:', '>', '#', '\$'])
             
