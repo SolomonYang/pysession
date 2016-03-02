@@ -592,16 +592,40 @@ class pysession:
         #
         prompt_line = o.split('\n')[-1].strip()
 
+        # looking for router prompt in config mode, like 
+        # 'telnet@hostname_gw_newyork(config-if-e10000-1/5)#'
+        re_prompt_config = re.search('^([^\n]+)\((.*)\)([#|>|\$])$', prompt_line)
+
         # looking for 'telnet@hostname_gw_newyork#' or 'LP-1>'
         # host        -> 'telnet@hostname_gw_newyork'
         # prompt_char -> '#'
         #
         # Avoid Invalid input -> Enable
         #
-        re_prompt_found = re.search('^([^\n]+[^-])([#|>|\$])$', prompt_line)
+        re_prompt_simple = re.search('^([^\n]+[^-])([#|>|\$])$', prompt_line)
 
-        if re_prompt_found:
-            host, prompt_char = re_prompt_found.groups()
+        if re_prompt_config:
+            host, config, prompt_char = re_prompt_config.groups()
+
+            # Brocade NetIron: take out telnet|ssh if any from host
+            if '@' in host:
+                host = host.split('@')[1]
+
+            if prompt_char == r'$':
+                prompt_char == '\\$'
+
+            this_prompt = '%s[^\n]*%s' % (host, prompt_char)
+
+            self.print_debug_message(\
+                'L.pysession.parse_prompt: get prompt - [%s]' % \
+                repr(this_prompt), DEBUG_MSG_VERBOSE)
+
+            #if this_prompt not in self.prompt_list:
+            #    self.prompt_list.append(this_prompt)
+            self.prompt_list=[this_prompt]
+
+        elif re_prompt_simple:
+            host, prompt_char = re_prompt_simple.groups()
 
             # Brocade NetIron: take out telnet|ssh if any from host
             if '@' in host:
