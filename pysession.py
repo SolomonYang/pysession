@@ -815,8 +815,8 @@ class pysession:
                 'L.pysession.send_line.1: line=[%s], expecting prompt change'\
                     % line, DEBUG_MSG_VERBOSE)
 
-            # enable 
-            if re.match('^en.*', line):
+            # enable NOT end, go to enable()
+            if re.match('^en.*', line) and not re.match('^end.*', line):
                 if self.enable() == -1:
                     self.print_debug_message('send_line: failed to enter \
                         enable mode', 2)
