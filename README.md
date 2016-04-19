@@ -13,7 +13,9 @@ So as a user, you don't need to spend your efforts/time on the script hundreds o
 You can use pysessin either as a standalone tool or a python library for your own python program. 
 
 * Standalone tool, actually i use this way to test the library after making any changes
-```./pysession.py -s 'telnet 1.1.1.1 2001; ssh admin@1.1.1.2' -c 'show ver; show ip route' -p pswd -e enablepswd'```
+```
+./pysession.py -s 'telnet 1.1.1.1 2001; ssh admin@1.1.1.2' -c 'show ver; show ip route' -p pswd -e enablepswd'
+```
 Then this python script will login the sessions of -s paramenter and run the commands specified in -c argument. 
 
 * Python library
