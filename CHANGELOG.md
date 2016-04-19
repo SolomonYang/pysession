@@ -8,11 +8,9 @@
 1) page-break
 2) prompt parse for config mode
 
-#version 0.3 - To Do
-1) pysession.conf - not hard coding normal prompts
+#version 1.0 
+1) pysession.conf - user-defined prompts/handling instead of hard coded in script
+2) jump server - support command based jump server
 
-#version 0.4 - To Do
-1) jump feature
-
-#version 0.5 - To Do
+#version 2.0 - To Do
 1) router script
