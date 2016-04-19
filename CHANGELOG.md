@@ -9,7 +9,7 @@
 2) prompt parse for config mode
 
 #version 1.0 
-1) pysession.conf - user-defined prompts/handling instead of hard coded in script
+1) pysession.conf - user-defined prompts/handling instead of hard coded in script 
 2) jump server - support command based jump server
 
 #version 2.0 - To Do
