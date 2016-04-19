@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 Base class for pysession
 1) Define network devices and store necessary varibles like connection, 
@@ -9,42 +11,39 @@ Base class for pysession
 """
 
 import re
+import os
 import sys
 import time
+import getopt
 import getpass
 import pexpect
 from datetime import datetime
 
-__version__ = '0.2'
+__version__ = '1.0'
 
-MAX_READ = 327680
 
-CR = '\r'
-LF = '\n'
+# --------------------------------------------------------------------------- #
+# Default Values
+# --------------------------------------------------------------------------- #
+'''
+We have 3 tiers of value assignment and later ones overwrite the previous
+1) hard-coded in pysession.py as below
+2) defined in pysession.conf
+3) send in as argument when calling pysession()
+'''
+
+# EOL values: CR, LF and CRLF
+CR   = '\r'
+LF   = '\n'
 CRLF = '\r\n'
 
-
-# --------------------------------------------------------------------------- #
-# CONNECT_PROMPT_LIST: for init connect() use, 
-# INIT_PROMPT_LIST: for the prompt parse
-# --------------------------------------------------------------------------- #
-CONNECT_PROMPT_LIST = ['yes/no', 'ame:', 'assword:', '>', '#', '\$']
-INIT_PROMPT_LIST =['#', '[^-]>', '\$']
-
-# --------------------------------------------------------------------------- #
-# default values, which can be changed accordingly. For example, all of 
-# routers use same username and password, you don't specify it repeatedly 
-# when defining session. Just change the default values
-#
-# DEFAULT_SHORT_TIMEOUT, pexpect uses 30 seconds. We use 10 sec instead. 
-# DEFAULT_DEVICE_TYPE, given as 'router' then pysession will try to enable 
-#     and page off session by sending "term len 0" and "skip"
-# --------------------------------------------------------------------------- #
-DEFAULT_USERNAME = ''
-DEFAULT_PASSWORD = ''
-DEFAULT_ENABLE_PASSWORD = ''
-DEFAULT_SHORT_TIMEOUT = 120
-DEFAULT_DEVICE_TYPE = 'router'
+CONF_FILENAME   = './pysession.conf'
+MUST_ENABLE     = True
+LOG_FILE_PREFIX = 'pys__'
+MAX_READ        = 327680
+SHORT_TIMEOUT   = 15
+LONG_TIMEOUT    = 120
+TERM_WIDTH      = 112
 
 # --------------------------------------------------------------------------- #
 # debug meessage level
@@ -55,8 +54,6 @@ DEBUG_MSG_INFO    = 2
 DEBUG_MSG_ERROR   = 1
 DEBUG_MSG_CRITICAL= 0
 
-DEFAULT_DEBUG_LEVEL = DEBUG_MSG_VERBOSE
-DEFAULT_DEBUG_LEVEL = DEBUG_MSG_INFO
 
 # --------------------------------------------------------------------------- #
 class pysession:
@@ -65,9 +62,10 @@ class pysession:
 
     To create a pysession to device(router, switch or server) via ssh, telnet
     or console, just create a session like:
-    rtr1 = pysession(session='telnet 10.1.1.1')         ; telnet vty
-    rtr2 = pysession(session='telnet 10.1.1.1 2001')    ; telnet console
-    rtr3 = pysession(session='ssh -l user 10.1.1.1')    ; ssh 
+    rtr1 = pysession(session='telnet 10.1.1.1')      ; telnet vty
+    rtr2 = pysession(session='telnet 10.1.1.1 2001') ; telnet console
+    rtr3 = pysession(session='ssh -l user 10.1.1.1') ; ssh 
+    rtr3 = pysession(session='ssh user@10.1.1.1')    ; ssh 
 
     Or create a session in interactive way by giving session, user, pswd and
     enable pswd, 
@@ -76,72 +74,128 @@ class pysession:
 
     # ----------------------------------------------------------------------- #
     def __init__(self, 
+                 jump_session='',
+                 jump_user='',
+                 jump_password='',
                  session='',
-                 user=DEFAULT_USERNAME, 
-                 password=DEFAULT_PASSWORD, 
-                 enable_password=DEFAULT_ENABLE_PASSWORD, 
-                 device_type=DEFAULT_DEVICE_TYPE, 
-                 device_os='', 
-                 device_version='', 
-                 output_file='',
-                 log_file_prefix='pys__', 
-                 timeout=DEFAULT_SHORT_TIMEOUT,
-                 debug_level=DEFAULT_DEBUG_LEVEL):
+                 user='', 
+                 password='',
+                 enable_password='',
+                 \
+                 output_file='', 
+                 log_file_prefix='', 
+                 timeout=None,
+                 debug_level=None, 
+                 conf_file=CONF_FILENAME,
+                 ):
 
         #
-        # 1. initialize internal variables
+        # 0. lists of possible prompt and corresponding actions
+        # 
+
+        # prompt|action_all_list, used for jump/login/session stages
+        self.prompt_list_all_stages = []
+        self.action_list_all_stages = []
+
+        # prompt|action_login_list, used for jump/login stages
+        self.prompt_list_login = []
+        self.action_list_login = []
+
+        # prompt|action_login_list, used for jump/login stages
+        self.prompt_list_jump = []
+        self.action_list_jump = []
+
+        # prompt|action_login_console_list, used for jump/login stages
+        self.prompt_list_login_console = []
+        self.action_list_login_console = []
+
+        # prompt|action_enable_list, used for prompt parse
+        self.prompt_enable_list = []
+        self.action_enable_list = []
+
+        # special commands and handling list
+        self.command_special_list = []
+        self.handling_special_list = []
+
+        # list of prompt/action used by expect()
+        self.stage = 'init'
+        self.prompt_list = []
+        self.action_list = []
+        self.current_prompt = ''
+
         #
-        self.prompt_line = None
-        self.timeout = timeout
+        # 1. read conf file and update default values + prompt list
+        #
+        self.read_conf_file(conf_file)
+        
+        #
+        # 2. initialize internal variables
+        #
+        if timeout: 
+            self.timeout = timeout
+        else:
+            self.timeout = SHORT_TIMEOUT
+
         self.timeout_counter = 0
         self.timeout_max_allowed = 5
 
-        self.device_type = device_type
-        self.device_os = device_os
-        self.device_version = device_version
-
+        # for Brocade NI/FI platform, set debug destination to current session
         self.debug_dest_to_me = False
-        self.EOL = CRLF
 
-        # print each cmd in pretty line formate
-        self.pprint = False
+        # EOL - End of Line, Default is CR(\r)
+        self.EOL = CR
+
+        # log format: 
+        # ----- 2016-04-15, 17:09, ssh admin@172.16.1.1 -----
+        # +++++++++++++++++++++++++++++++++++++++++++++++++++
+        self.log_format = 'Date_Time_Session_Command'
+
+        # internal counters of commands and timer
+        self.counter_line = 0
+        self.counter_command = 0
+        self.counter_invalid_command = 0
+        self.start_time = time.time()
+        self.sleep_time = 0
+
+        # session must go to enable mode, if False, login at > then leave
+        self.must_enable = MUST_ENABLE
+
+        # session log file prefix
+        if log_file_prefix == '':
+            log_file_prefix = LOG_FILE_PREFIX
 
         # debug level, the higher, the more verbose, default is 0, which 
         # means none debug
         self.debug_level = debug_level
 
-        self.pys_parser = PYSParser()
-
-        # counters of commands
-        self.counter_line = 0
-        self.counter_cmd = 0
-        self.counter_invalid_cmd = 0
-
-        self.start_time = time.time()
-        self.sleep_time = 0
-
         #
-        # 2. initialize session info
+        # 4. initialize session info
         #
-        if session.lower() == 'interactive' or session == '':
+        if session.lower() == 'interactive':
             self.session, self.user, self.password, self.enable_password\
             = self.get_session_interactive()
-        else:
+        elif session.lower() == 'juminteractive':
+            self.jump_session, self.jump_user, self.jump_password,\
             self.session, self.user, self.password, self.enable_password\
-            = session, user, password, enable_password
+            = self.get_session_jump_interactive()
+        else:
+            self.jump_session, self.jump_user, self.jump_password,\
+            self.session, self.user, self.password, self.enable_password\
+            = jump_session, jump_user, jump_password, session, user,\
+            password, enable_password
       
-        if self.debug_level: 
-            print '\n'.join([self.session, self.user, self.password, \
-                self.enable_password])
-
         # parse the session, if not valid session info, exit
-        self.session_valid, self.access_mode, self.access_protocol, \
-            self.hostname, _user = self.parse_session()
+        self.session_valid, self.session_protocol, self.hostname, ssh_user = \
+            self.parse_session()
+
+        # if session is ssh, update the self.user
+        if ssh_user != '':
+            self.user = ssh_user
 
         # if ssh, self.EOL='\n'
-        if self.access_protocol == 'ssh':
-            self.EOL = LF
+        #if self.session_protocol == 'ssh': self.EOL = LF
 
+        # create log_file_name
         self.log_file_name = output_file
         if self.log_file_name == '': 
             self.log_file_name = log_file_prefix + self.hostname + '__' + \
@@ -149,21 +203,10 @@ class pysession:
 
         sys.stdout = PYSLogger(self.log_file_name)
 
-        # if session is ssh, update the self.user
-        if _user != '':
-            self.user = _user
-
-        #
-        # prompt_list is set when session established, sth like
-        # hostname_device_local[^\n]#. And this can be expanded as
-        # new prompt mode, like "rconsole 1" etc
-        #
-        self.prompt_list = []
-
         # real pyexpect instance of router connection
         self.child = None
 
-        if self.connect() == -1:
+        if self.jump_login() == -1:
             self.print_debug_message(
                 "E.pysession.__init__: unable to establish session [%s]"\
                 % self.session, DEBUG_MSG_ERROR)
@@ -172,12 +215,69 @@ class pysession:
                 , DEBUG_MSG_ERROR)
             return 
 
-        self.collect_sysinfo()
-        
-        self.post_session()
+    # ----------------------------------------------------------------------- #
+    def read_conf_file(self, conf_file_name):
+        '''
+        read conf file to fetch default values, prompt/action, 
+        command/handling info. In this way, no need to hard code every
+        possible prompts in py file, but user can define themselves. 
+        '''
+        conf = PYSConfigParser()
+        conf.read(conf_file_name)
+
+        # read default values
+        if 'DefaultValues' in conf.sections:
+            for k,v in conf.dict['DefaultValues'].iteritems():
+                if k == 'MustEnable':
+                    MUST_ENABLE = (v.lower()=='true')
+                elif k == 'LogFilePrefix':
+                    LOG_FILE_PREFIX = v
+                elif k == 'DebugLevel':
+                    DEBUG_LEVEL = int(v)
+                elif k == 'MaxRead':
+                    MAX_READ = int(v)
+                elif k == 'ShortTimeout':
+                    SHORT_TIMEOUT = int(v)
+                elif k == 'LongTimeout':
+                    LONG_TIMEOUT = int(v)
+                else:
+                    print 'E.pysession.read_conf_file(): unsupported %s, %s'\
+                        % (k, v)
+
+        # 2.2 construct prompt|action_list for all|jump|login|session
+        if 'Prompt.Stage.All' in conf.sections:
+            for k,v in conf.dict['Prompt.Stage.All'].iteritems():
+                self.prompt_list_all_stages.append(k)
+                self.action_list_all_stages.append(v)
+
+        if 'Prompt.Stage.Login' in conf.sections:
+            for k,v in conf.dict['Prompt.Stage.Login'].iteritems():
+                self.prompt_list_login.append(k)
+                self.action_list_login.append(v)
+
+        if 'Prompt.Stage.Jump' in conf.sections:
+            for k,v in conf.dict['Prompt.Stage.Jump'].iteritems():
+                self.prompt_list_jump.append(k)
+                self.action_list_jump.append(v)
+
+        if 'Prompt.Stage.Login.Console' in conf.sections:
+            for k,v in conf.dict['Prompt.Stage.Login.Console'].iteritems():
+                self.prompt_list_login_console.append(k)
+                self.action_list_login_console.append(v)
+
+        if 'Prompt.Stage.Enable' in conf.sections:
+            for k,v in conf.dict['Prompt.Stage.Enable'].iteritems():
+                self.prompt_enable_list.append(k)
+                self.action_enable_list.append(v)
+
+        # 2.3 construct command_list and handle_list
+        if 'Command.Special' in conf.sections:
+            for k,v in conf.dict['Command.Special'].iteritems():
+                self.command_special_list.append(k)
+                self.handling_special_list.append(v)
 
     # ----------------------------------------------------------------------- #
-    def print_debug_message(self, msg, msg_level=DEBUG_MSG_VERBOSE, 
+    def print_debug_message(self, msg='', msg_level=DEBUG_MSG_VERBOSE, 
             do_repr=False):
         """
         common debug print, only print the msg with level <= self.debug_level
@@ -202,13 +302,29 @@ class pysession:
         return str
 
     # ----------------------------------------------------------------------- #
+    def get_info_or_interactive(self, v, msg='Please provide info:', 
+        is_pswd=True): 
+        """
+        get information, if null, start to collect interactively
+        """
+        if v == '':
+            if is_pswd:
+                v = getpass.getpass(msg)
+            else: 
+                v = raw_input(msg)
+
+        return v
+
+    # ----------------------------------------------------------------------- #
     def get_session_interactive(self): 
         """
-        if session info invalid, need to call this method to get session 
+        if session info = 'interactive', call this method to get session 
         interactivly
         """
-        session = raw_input("     Please provide the session info: ")
-        user    = raw_input("        User ID(press enter if none): ")
+        session = \
+            raw_input(      "     Please provide the session info: ")
+        user    = \
+            raw_input(      "        User ID(press enter if none): ")
         password = \
             getpass.getpass(" Login password(press enter if none): ")
         enable_password = \
@@ -217,79 +333,71 @@ class pysession:
         return [session, user, password, enable_password]
 
     # ----------------------------------------------------------------------- #
-    def sendline(self, cmd): 
+    def get_jump_session_interactive(self): 
         """
-        pexpect.sendline() uses os.linesep after string, which is telnet/ssh
-        client OS's line seperator, e.g. '\n' in POSIX/*nix. So we use 
-        self.EOL instead if router session, or \n for other sessions. 
+        if session info = 'jumpinteractive', call this method to get session 
+        interactivly
         """
+        jump_session  = \
+            raw_input(      "    Please provide the jump session info: ")
+        jump_user     = \
+            raw_input(      "       User jump ID(press enter if none): ")
+        jump_password = \
+            getpass.getpass("Login jump password(press enter if none): ")
+        session = raw_input("         Please provide the session info: ")
+        user    = raw_input("            User ID(press enter if none): ")
+        password = \
+            getpass.getpass("     Login password(press enter if none): ")
+        enable_password = \
+            getpass.getpass("    Enable password(press enter if none): ")
 
-        cmd = cmd.strip()
-
-        if self.device_type == 'router' :
-            real_send = cmd + self.EOL
-        else:
-            real_send = cmd + '\n' 
-        
-        self.print_debug_message("L.pysession.sendline(), real_send = [%s]"\
-            % repr(real_send), DEBUG_MSG_VERBOSE)
-
-        self.print_debug_message(self.__str__(), DEBUG_MSG_VERBOSE)
-
-        return self.child.send(real_send)
+        return [session, user, password, enable_password]
 
     # ----------------------------------------------------------------------- #
-    def expect(self, prompt_list=[], timeout=DEFAULT_SHORT_TIMEOUT, 
+    def expect(self, prompt_list=[], action_list=[], timeout=0, 
         looking_for_prompt=True):
         """
         local expect wrapper with common exception handling
         """
+        if timeout == 0:
+            timeout = self.timeout
 
-        # if not prompt_list specified, use self.prompt_list
-        if prompt_list == []:
+        # if empty prompt_list, use self.prompt_list. This is for prompt parse
+        if len(prompt_list) == 0:
             prompt_list = self.prompt_list
+            
+        if len(action_list) == 0:
+            action_list = self.action_list
+        
+        o_all = ''
 
-        # if self.prompt_list is empty (just login no prompt collected),
-        if prompt_list == []:
-            prompt_list = INIT_PROMPT_LIST
+        try: 
+            r = self.child.expect(prompt_list, timeout=timeout) 
+            o_all += self.child.before + self.child.after 
 
-        _prompt_list = prompt_list + [\
-            r'--More--, next page: Space', \
-            r'--More--, page: Space, nopage']
-
-        self.print_debug_message(\
-            '\nL.pysession.expect.1: final prompt_list = %s\n'\
-            % '\n'.join(map(repr, _prompt_list)), DEBUG_MSG_VERBOSE)
-
-        try:
-            page_break = True 
-
-            while page_break: 
-                return_value = self.child.expect(_prompt_list, \
-                    timeout=timeout) 
-                
-                total_output = self.child.before + self.child.after 
-
-                # return_value = last 2, means that seeing
-                # r'--More--, next page: Space', 
-                # r'--More--, page: Space, nopage']
-                page_break = (return_value >= (len(_prompt_list)-1))
-                if page_break: 
-                    self.child.send(' ') 
-                    self.print_debug_message(\
-                        '\nL.pysession.expect.2: page break')
-
-                # get Password:, send self.enable_password
-                #r'assword', \
-                #if return_value == len(_prompt_list) - 2:
-                #    self.child.sendline(self.enable_password) 
-                #    self.print_debug_message(\
-                #        '\nL.pysession.expect.2: page break')
-
+            # print out debug msg
+            _action_list = action_list[:]
+            _action_list[r] = '--->  ' + _action_list[r]
             self.print_debug_message(\
-                '\nL.pysession.expect.2: retval=%d\nbefore:%s\nafter:%s'\
-                % (return_value, self.child.before, self.child.after,), \
-                DEBUG_MSG_VERBOSE)
+                msg='\n%s  L.expect(): prompts vs action  %s\n%s' % (
+                    '-' * 25, 
+                    '-' * 25,
+                    PYSLib.pys_pprint(
+                        map(repr,self.prompt_list), 
+                        _action_list,
+                        action="str"),
+                    ),
+                msg_level=DEBUG_MSG_VERBOSE
+                )
+            
+            while action_list[r] == '$space':
+                ''' if return $space, it is a page break, sending space''' 
+                self.child.send(' ') 
+                self.print_debug_message('\nL.pysession.expect: page break')
+
+                r = self.child.expect(prompt_list, timeout=timeout) 
+                o_all += self.child.before + self.child.after 
+
 
             # reset self.timeout_counter
             self.timeout_counter = 0
@@ -298,7 +406,7 @@ class pysession:
             self.child.after = ''
             self.child.before= ''
 
-            return return_value, total_output
+            return r, o_all 
 
         except pexpect.EOF:
             #
@@ -328,55 +436,12 @@ class pysession:
                 self.print_debug_message(\
                     'E.pysession.expect(): session timeout %d times' % \
                         self.timeout_max_allowed, DEBUG_MSG_ERROR)
-                self.print_debug_message(\
-                    '%s E.pysession.expect(), %s %s' % ('*'*30, \
-                    'prompt list', '*'*30), DEBUG_MSG_VERBOSE)
-                self.print_debug_message('\n'.join(prompt_list), \
-                    DEBUG_MSG_VERBOSE)
-                self.print_debug_message('*'*60, DEBUG_MSG_VERBOSE)
 
         # print detailed debug 
-        #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
         self.print_debug_message(str(self.child), 0)
 
         return -1, ''
 
-    # ----------------------------------------------------------------------- #
-    def sendline_expect(self, send='', prompt_list=[], mode='nostrip'):
-        """
-        local expect wrapper to combine 2 pexpect procedure sendline and 
-        expect with common exception handling
-        """
-
-        #
-        # default, strip input. For some cases, like sending space to show page 
-        # in IOS, then no strip
-        #
-        if mode == 'strip':
-            send = send.strip()
-
-        self.print_debug_message("L.pysession.sendline_expect(), send:[%s]" \
-            % repr(send), DEBUG_MSG_VERBOSE)
-
-        if send != '': 
-            self.sendline(send)
-
-        # if no given prompt_list, use the default self.prompt_list
-        if prompt_list == []:
-            #print '***************************'
-            #print 'self.prompt_list', self.prompt_list
-            #print '***************************'
-            prompt_list = self.prompt_list
-
-        i, o = self.expect(prompt_list=prompt_list)
-
-        self.print_debug_message('\n%s L.pysession.sendline_expect %s' % \
-            ('*'*20, '*'*20), DEBUG_MSG_WARNING)
-        self.print_debug_message('return value: %d' % i, DEBUG_MSG_WARNING)
-        self.print_debug_message('return output: \n%s' % o, DEBUG_MSG_WARNING)
-        self.print_debug_message('%s' % '*'*69, DEBUG_MSG_WARNING)
-
-        return i, o
 
     # ----------------------------------------------------------------------- #
     def enable(self):
@@ -415,194 +480,181 @@ class pysession:
         return -1
 
     # ----------------------------------------------------------------------- #
-    def connect(self, enable_mode=1):
+    def get_user(self):
         """
-        initial connection to router, exited after reaching enabled mode
-        if enable_mode=1
+        get user id depend on stage
+        """
+        if self.stage == 'jump':
+            return self.get_info_or_interactive(self.jump_user, \
+                msg="Please provide jump user id: ", is_pswd=False)
+        else:
+            return self.get_info_or_interactive(self.user, \
+                msg="Please provide user id: ", is_pswd=False)
+    
+    # ----------------------------------------------------------------------- #
+    def get_password(self):
+        """
+        get user password depend on stage
+        """
+        if self.stage == 'jump':
+            return self.get_info_or_interactive(self.jump_password, \
+                msg="Please provide jump user password: ", is_pswd=True)
+        elif self.stage == 'login':
+            return self.get_info_or_interactive(self.password, \
+                msg="Please provide login password: ", is_pswd=True)
+        else:
+            return self.get_info_or_interactive(self.enable_password, \
+                msg="Please provide enable password: ", is_pswd=True)
+
+    # ----------------------------------------------------------------------- #
+    def make_prompt_action_list(self):
+        '''
+        construct prompt|action list
+        '''
+
+        self.prompt_list = self.prompt_list_all_stages[:]
+        self.action_list = self.action_list_all_stages[:]
+
+        if self.stage == 'jump': 
+            self.prompt_list += self.prompt_list_jump 
+            self.action_list += self.action_list_jump
+        elif self.stage == 'login': 
+            self.prompt_list += self.prompt_list_login 
+            self.action_list += self.action_list_login
+
+            if self.session_protocol == 'console': 
+                self.prompt_list += self.prompt_list_login_console 
+                self.action_list += self.action_list_login_console
+
+        elif self.stage == 'done': 
+            self.prompt_list.append(self.current_prompt)
+            self.action_list.append('$done')
+
+    # ----------------------------------------------------------------------- #
+    def jump_login(self):
+        """
+        establish connection to device, 1) jump then login; 2) or login
         """
 
         #
-        # spawn a session with provided connection info
+        # spawn a connection either jump or session
         #
-        self.child = pexpect.spawn(self.session, maxread=MAX_READ)
+        if self.jump_session != '': 
+            self.child = pexpect.spawn(self.jump_session, maxread=MAX_READ)
+            self.stage = 'jump'
+        else:
+            self.child = pexpect.spawn(self.session, maxread=MAX_READ)
+            self.stage = 'login'
+
         self.child.logfile_read = sys.stdout
 
-        #
-        # 1st send a \r\n, then check 5 possible prompts
-        #
-        self.print_debug_message(\
-            'L.pysession.connect.1 - send EOL to expect return:\n%s' % \
-            '_____'.join(CONNECT_PROMPT_LIST), DEBUG_MSG_VERBOSE)
+        # construct prompt|action list
+        self.make_prompt_action_list()
 
-        if self.access_mode == 'ssh':
-            index, o = self.sendline_expect(send='',
-                prompt_list=CONNECT_PROMPT_LIST)
-        else:
-            index, o = self.sendline_expect(send=self.EOL, 
-                prompt_list=CONNECT_PROMPT_LIST)
+        # if console session, send one EOL, and add console prompts
+        if self.session_protocol == 'console': 
+            self.child.send(self.EOL)
 
-        self.print_debug_message(\
-            'L.pysession.connect.2 - get indexed return %d' % index, \
-            DEBUG_MSG_VERBOSE)
-        #
-        # child return output -> 'yes/no', asking confirmation of DSA key
-        #
-        if index == 0:
-            self.print_debug_message('connect_0: be asked for SSH key', 2)
+        while True: 
+            r, o = self.expect()
 
-            index, o = self.sendline_expect('yes',
-                prompt_list=CONNECT_PROMPT_LIST)
-
-            if index == 0:
-                self.print_debug_message('connect_0: error for SSH key', 0)
-                return -1
-        
-        #
-        # child return output -> 'U|username:', providing login credentials
-        #
-        if index == 1:
-            self.print_debug_message('connect_1: be asked for user', 2)
-
-            if self.user == '':
-                self.user = \
-                    getpass.getpass('please provide login id: ')
-                
-            index, o = self.sendline_expect(self.user, 
-                ['yes/no', 'sername:', 'assword:', '>', '#', '\$'])
-            
-            if index < 2:
-                self.print_debug_message('connect_1: error for user', 0)
-                return -1
-        
-        #
-        # child return output -> 'P|password', providing password
-        #
-        if index == 2:
+            # print out debug msg
+            _action_list = self.action_list[:]
+            _action_list[r] = '--->  ' + _action_list[r] 
             self.print_debug_message(\
-                'I.pysession.connect.2: being asked for passoword',
-                DEBUG_MSG_INFO)
-
-            if self.password == '':
-                self.password = \
-                    getpass.getpass('please provide login password: ')
-                
-            #self.child.after = ''
-            #self.child.before= ''
-
-            index, o = self.sendline_expect(self.password, 
-                prompt_list=CONNECT_PROMPT_LIST)
-
-            #CONNECT_PROMPT_LIST = ['yes/no', 'ame:', 'assword:', '>', '#', '\$']
-            if index < 3:
-                #print index
-                #print '[', o ,']'
-                self.print_debug_message(\
-                'E.I.pysession.connect.2: password error', DEBUG_MSG_ERROR)
-                return -1
-        
-        # 
-        # child return output -> '>', means login router but not into enable 
-        # mode
-        #
-        if index == 3: 
-            self.print_debug_message(
-                'I.pysession.connect.3: login none-enable mode', 
-                DEBUG_MSG_INFO)
-
-            # prompt '>' means it is a router
-            self.device_type = 'router'
-
-            if enable_mode:
-                # if conn must exit in enabled mode, go aheand for enable()
-                if self.enable() == -1:
-                    self.print_debug_message('connect_3: failed to enter \
-                        enable mode', 2)
-                    return -1
-
-        #
-        # child return output -> '#', means directly into enable mode
-        #
-        if index == 4: 
-            self.print_debug_message('connect_4: login enable mode', 2)
-
-            # prompt '>' means it is a router
-            self.device_type = 'router'
-
-        #
-        # child return output -> '$', means it is a linux box
-        #
-        if index == 5: 
-            self.print_debug_message('connect_5: login linux/pc', 2)
-
-            # prompt '$' means it is a router
-            self.device_type = 'pc'
+                msg='\n%s  L.connect: prompts vs action  %s\n%s' % (
+                    '-' * 25, 
+                    '-' * 25,
+                    PYSLib.pys_pprint(
+                        map(repr,self.prompt_list), 
+                        _action_list,
+                        action="str"),
+                    ),
+                msg_level=DEBUG_MSG_VERBOSE
+                )
+            
+            if self.action_list[r] == '$done':
+                if self.stage == 'jump':
+                    self.child.send(self.session + self.EOL)
+                    self.stage = 'login'
+                else:    
+                    break
+            elif self.action_list[r] == '$space':
+                self.child.send(' ')
+            elif self.action_list[r] == '$user': 
+                self.child.send(self.get_user() + self.EOL)
+            elif self.action_list[r] == '$password':
+                self.child.send(self.get_password() + self.EOL)
+            elif self.action_list[r] == '$enable': 
+                self.stage = 'enable'
+                self.child.send('enable' + self.EOL)
+            else:
+                if self.action_list[r][-1] == '$':
+                    self.child.send(self.action_list[r][:-1])
+                else:
+                    self.child.send(self.action_list[r] + self.EOL)
 
         self.parse_prompt()
 
+        self.stage = 'done'
+        self.make_prompt_action_list()
+
         self.print_debug_message(\
-            'L.pysession.connect(): successfully login router', \
-            DEBUG_MSG_ERROR)
-        
+            msg='\n%s  L.connect: after prompt parse  %s\n%s' % (
+                '-' * 25, 
+                '-' * 25, 
+                PYSLib.pys_pprint( 
+                    map(repr,self.prompt_list), 
+                    _action_list, 
+                    action="str"
+                    )
+                ),
+                msg_level=DEBUG_MSG_VERBOSE
+                )
+            
+        self.sendline_expect('terminal len 0')
+        self.sendline_expect('skip')
+
         return 1
-
-    # ----------------------------------------------------------------------- #
-    def page_off(self):
-        #
-        # At this time, we don't know the type of device/OS, unless 
-        # it was pre-set by parameter passed thru. If self.device_os=='', we
-        # send both commands
-        #
-        if self.device_os == '' or re.search('cisco|ios', self.device_os, 
-            re.IGNORECASE): 
-            self.sendline_expect('terminal len 0')
-
-        if self.device_os == '' or re.search('brocade|netiron', self.device_os, 
-            re.IGNORECASE): 
-            self.sendline_expect('skip')
 
     # ----------------------------------------------------------------------- #
     def parse_prompt(self, send_EOL=True):
         """
-        send an empty newline, the last time of output is full prompt, 
+        parse the prompt to get exact hostname, the prompt will be
+        hostname[^\n]#, for example telnet@LA.Gateway(config-if-e10000-1/5)#
+        the prompt line "LA.Gateway[^\n]#". So when script goes into configure
+        mode, will not miss the prompt
         """
-
-        #keep_debug_level = self.debug_level; self.debug_level = 10
-
-        #
         # parse_prompt.1: send an EOL
-        #
-        if send_EOL: 
+        if send_EOL:
             self.child.send(self.EOL) 
-            self.print_debug_message(
-                'L.pysession.parse_prompt.1: send an EOL', DEBUG_MSG_VERBOSE)
-        else:
-            self.print_debug_message(
-                'L.pysession.parse_prompt.1: no EOL send', DEBUG_MSG_VERBOSE)
 
-        #
-        # parse_prompt.2: expect one of INIT_PROMPT_LIST #|>|$
-        #
-        i, o = self.expect(prompt_list=INIT_PROMPT_LIST, \
-            looking_for_prompt=False)
-        self.print_debug_message('L.pysession.parse_protmp.2: rcv index %d'\
-            % i, DEBUG_MSG_VERBOSE)
+        # parse_prompt.2: expect one of self.prompt_enable_list
+        r, o = self.expect(
+            prompt_list=self.prompt_enable_list, 
+            action_list=self.action_enable_list,
+            )
 
-        #
         # parse_prompt.3: parse the last line to get prompt
-        #
         prompt_line = o.split('\n')[-1].strip()
 
-        # looking for router prompt in config mode, like 
-        # 'telnet@hostname_gw_newyork(config-if-e10000-1/5)#'
-        re_prompt_config = re.search('^([^\n]+)\((.*)\)([#|>|\$])$', prompt_line)
+        self.print_debug_message(\
+            '\nL.parse_prompt(): prompt line=[%s]' % prompt_line, 
+            DEBUG_MSG_VERBOSE
+            )
 
+        #
+        # looking for config prompt 'telnet@hostname(config-if-e10000-1/5)#'
+        #
+        re_prompt_config = re.search('^([^\n]+)\((.*)\)([#|>|\$])$', \
+            prompt_line)
+
+        #
         # looking for 'telnet@hostname_gw_newyork#' or 'LP-1>'
-        # host        -> 'telnet@hostname_gw_newyork'
-        # prompt_char -> '#'
         #
-        # Avoid Invalid input -> Enable
-        #
-        re_prompt_simple = re.search('^([^\n]+[^-])([#|>|\$])$', prompt_line)
+        #re_prompt_simple = re.search('^([^\n]+[^-])([#|>|\$])$',\
+        re_prompt_simple = re.search('^([^\n]+[^-])([#|>|\$])$',\
+            prompt_line)
 
         if re_prompt_config:
             host, config, prompt_char = re_prompt_config.groups()
@@ -614,16 +666,6 @@ class pysession:
             if prompt_char == r'$':
                 prompt_char == '\\$'
 
-            this_prompt = '%s[^\n]*%s' % (host, prompt_char)
-
-            self.print_debug_message(\
-                'L.pysession.parse_prompt: get prompt - [%s]' % \
-                repr(this_prompt), DEBUG_MSG_VERBOSE)
-
-            #if this_prompt not in self.prompt_list:
-            #    self.prompt_list.append(this_prompt)
-            self.prompt_list=[this_prompt]
-
         elif re_prompt_simple:
             host, prompt_char = re_prompt_simple.groups()
 
@@ -634,43 +676,23 @@ class pysession:
             if prompt_char == r'$':
                 prompt_char == '\\$'
 
-            this_prompt = '%s[^\n]*%s' % (host, prompt_char)
-
-            self.print_debug_message(\
-                'L.pysession.parse_prompt: get prompt - [%s]' % \
-                repr(this_prompt), DEBUG_MSG_VERBOSE)
-
-            #if this_prompt not in self.prompt_list:
-            #    self.prompt_list.append(this_prompt)
-            self.prompt_list=[this_prompt]
-
         else:
             self.print_debug_message(\
-                'E.pysession.parse_prompt: unexpected hostname/prompt - [%s]'\
-                % self.prompt_line, DEBUG_MSG_ERROR)
-
+                'E.parse_prompt: unexpected hostname/prompt - [%s]'\
+                % prompt_line, DEBUG_MSG_ERROR)
+            
+            host = prompt_line
+            prompt_char = ''
+        
+        self.current_prompt = '%s[^\n]*%s' % (host, prompt_char) 
+        
         self.print_debug_message(\
-                'D.pysession.parse_prompt: promplist: %s'\
-                    % '|'.join(map(repr, map(repr,self.prompt_list))), 
-                DEBUG_MSG_WARNING)
-
-        #self.debug_level = keep_debug_level
+            'L.parse_prompt: current prompt = [%s]' % \
+            repr(self.current_prompt), DEBUG_MSG_VERBOSE
+            )
 
         return o
-    # ----------------------------------------------------------------------- #
-    def post_session(self):
-        """
-        1) Turn display page mode off.  
-           * Cisco devices - "terminal length 0"; 
-           * Brocade devices - "skip"
-        2) Fetch the device prompt
-        """
-
-        if self.device_type == 'router' or self.device_type == 'switch':
-            self.page_off()
-
-        #self.parse_prompt()
-
+    
     # ----------------------------------------------------------------------- #
     def parse_session(self):
         """
@@ -685,10 +707,9 @@ class pysession:
         output:
         =======
         0) valid session: True|False
-        1) access_mode:   telnet|ssh|console
-        2) protocol:      telnet|ssh
-        3) hostname:      a.b.c.d or <hostname> or term_svr:port#
-        4) user:          only for ssh session
+        1) protocol:      telnet|ssh
+        2) hostname:      a.b.c.d or <hostname> or term_svr:port#
+        3) user:          only for ssh session
         """
 
         # remove leading and tailing spaces
@@ -697,29 +718,33 @@ class pysession:
         # 'telnet  1.2.3.4' or 'telnet hostname.company.com'
         re_telnet_found = re.search('^telnet\s+(\S+)$', self.session)
         if re_telnet_found:
-            return True, 'telnet', 'telnet', re_telnet_found.group(1), ''
+            return True, 'telnet', re_telnet_found.group(1), ''
 
         # 'ssh -oKexAlgorithms=+diffie-hellman-group1-sha1 -l admin 10.17.146.21'
         re_ssh_found1 = re.search('^ssh\s+.*-l\s+(\S+)\s+(\S+)$', self.session)
         if re_ssh_found1:
-            return True, 'ssh', 'ssh', re_ssh_found1.group(2), \
+            return True, 'ssh', re_ssh_found1.group(2), \
                 re_ssh_found1.group(1)
 
         # 'ssh -oKexAlgorithms=+diffie-hellman-group1-sha1 admin@10.17.146.21'
         re_ssh_found2 = re.search('^ssh\s+.*\s+(\S+)@(\S+)$', self.session)
         if re_ssh_found2:
-            return True, 'ssh', 'ssh', re_ssh_found2.group(2), \
+            return True, 'ssh', re_ssh_found2.group(2), \
                 re_ssh_found2.group(1)
 
         re_console_found = re.search('^telnet\s+(\S+)\s+(\d+)$', self.session)
         if re_console_found:
-            return True, 'console', 'telnet', \
+            return True, 'console', \
                 ':'.join(re_console_found.groups()), ''
      
         return False, '', '', '', ''
 
     # ----------------------------------------------------------------------- #
     def set_debug_dest_to_me(self):
+        '''
+        For Brocade NetIron product, you need to set debug destination to 
+        current session. 
+        '''
         if self.debug_dest_to_me:
             return
         
@@ -750,164 +775,131 @@ class pysession:
         self.send_line('debug destination %s %s' % (session, session_num))
         
     # ----------------------------------------------------------------------- #
-    def collect_sysinfo(self):
-        """
-        After connection established, do "show device_version" which works on
-        most of network devices to collect system inforamtion, like vendor, os
-        and device_version. 
-
-        Under construction !!!!
-        """
-        pass
-
-    # ----------------------------------------------------------------------- #
-    def cmd_change_prompt(self, cmd=''):
+    def is_command_change_prompt(self, cmd=''):
+        '''
+        search self.command_special_list one by one to see if cmd change prompt
+        '''
         cmd = cmd.strip().lower()
 
-        # rconsol command change the prompt, like
-        # rconsole
-        # rc 1
-        # rconsole 10
-        if re.match('^rc.*', cmd):
-            return True
+        for c, h in zip(self.command_special_list, 
+            self.handling_special_list):
+            if re.match(c, cmd) and h == '$changeprompt':
+                return True
+                
+        return False
+    
+    # ----------------------------------------------------------------------- #
+    def is_command_enable(self, cmd=''):
+        '''
+        search self.command_special_list one by one to see if cmd is enable
+        '''
+        cmd = cmd.strip().lower()
 
-        # exit
-        if re.match('^ex.*', cmd):
-            return True
-
-        # enable
-        if re.match('^en.*', cmd):
-            return True
-
-        # dm monitor
-        if re.match('^dm mon', cmd):
-            return True
-
+        for c, h in zip(self.command_special_list, 
+            self.handling_special_list):
+            if re.match(c, cmd) and h == '$enable':
+                return True
+                
         return False
 
     # ----------------------------------------------------------------------- #
-    def send_line(self, line=''):
+    def is_command_debug(self, cmd=''):
         '''
-        Wrapper of pexpect.sendline(), but with 2 adds-on:
-        =====================================================================
-        1. send single line of cmd to router (multiple lines have been 
-           splitted by pysession.send()) and return value is purely output
-           from here instead of (index, output)
-           1) if this cmd is expected to change prompt; do
-           * send cmd+EOL
-           * parse new prompt
-           * return combined output 
-           2) if not change prompt, just simply sendline_expect
-
-        2. special commands for pysession, now we support
-           - !DO: sleep \d+ [min|sec].* 
-             * sleep <n> min/sec
-             * send an empty return to fetech output, like debug
+        to check if cmd is debug command
         '''
-        self.counter_cmd += 1
+        cmd = cmd.strip().lower() 
+        
+        if re.search('^deb', cmd):
+            return True
+       
+        return False
 
-        if self.pprint and line[0]!='!':
-            print '\n' + PYSLib.pline1('!!!CMD:%s!!!' % line)
-
-        if self.cmd_change_prompt(cmd=line): 
-
-            self.print_debug_message(\
-                'L.pysession.send_line.1: line=[%s], expecting prompt change'\
-                    % line, DEBUG_MSG_VERBOSE)
-
-            # enable NOT end, go to enable()
-            if re.match('^en.*', line) and not re.match('^end.*', line):
-                if self.enable() == -1:
-                    self.print_debug_message('send_line: failed to enter \
-                        enable mode', 2)
-            else: 
-                #self.child.send(line + self.EOL) 
-                self.child.send(line)
-
-            _output = self.parse_prompt()
-
-        else: 
-            if re.search('^deb', line.strip()):
-                self.set_debug_dest_to_me()
-
-            i, _output = self.sendline_expect(send=line)
-
-        if re.search('nvalid input|yntax error', _output):
-            self.counter_invalid_cmd += 1
-
-        return _output
-
-    def _send(self, lines=''):
-        '''
-        internal send function behind self.send(). no cmd parse, send line
-        to device one by one because pys_parser may convert one line to 
-        multiple lines
-        '''
-        output = ''
-
-        for line in lines.split('\n'):
-            # update counter_cmd +1
-            self.counter_cmd += 1
-
-            # send cmd to device and accumulate the output
-            output += self.send_line(line=line)
-
-        return output
     # ----------------------------------------------------------------------- #
-    def send(self, lines='', count_line=True):
+    def sendline(self, line): 
+        """
+        send line + EOL
+        """
+
+        # increase cmd counter
+        self.counter_command += 1 
+           
+        # all output
+        o = ''
+
+        prompt_changed = self.is_command_change_prompt(cmd=line)
+
+        is_enable = self.is_command_enable(cmd=line)
+
+        is_debug = self.is_command_debug(cmd=line)
+
+        self.print_debug_message(\
+            'L.sendline(): line=[%s], Prompt:%r, Enable:%r, Debug:%r' % \
+            (line, prompt_changed, is_enable, is_debug), DEBUG_MSG_VERBOSE)
+
+        if is_enable:
+            self.enable()
+        else:
+            if is_debug:
+                o += self.set_debug_dest_to_me()
+
+            self.child.send(line + self.EOL)
+
+            if prompt_changed: 
+                o += self.parse_prompt()
+                self.make_prompt_action_list()
+            
+        return o
+
+    # ----------------------------------------------------------------------- #
+    def sendline_expect(self, line):
+        """
+        sendline + expect
+        """ 
+        
+        _line = line.strip()
+        if self.log_format == 'Date_Time_Session_Command':
+            title = '%s, %s, %s' % (\
+                datetime.now().strftime("%Y/%m/%d %H:%M:%S"), 
+                self.session, _line)
+            
+            ll = (TERM_WIDTH - 2 - len(title))//2
+            rl = TERM_WIDTH - 2 - ll - len(title)
+
+            sys.stdout.write('\n' + '%s %s %s' % ('-'*ll, title, '-'*rl) + '\n')
+        else: 
+            sys.stdout.write('\n' + '-'*TERM_WIDTH + '\n')
+
+        o = self.sendline(line)
+
+        if re.search('nvalid input|yntax error', o):
+            self.counter_invalid_command += 1
+
+        o = self.expect()
+
+        sys.stdout.write('\n' + '~'*TERM_WIDTH + '\n')
+
+        return o
+    # ----------------------------------------------------------------------- #
+    def send(self, lines='', delimiter='\n', raw_mode=True):
         '''
-        Method to send input to device, we have 3 types of input which 
-        specified in argument lines.
-        1) single line of cmd, like
-        router.send("show ver")
+        Major external method to send singl/multiple command(s) to session
 
-        2) multiple lines of cmd, like
-        router.send("""
-            conf term
-            inter ve 1
-            ip address 1.1.1.1/24
-            """)
-
-        3) special commands for pysession
+        send --> sendline_expect
+                 |--> sendline
+                 |    |--> child.send()
+                 |--> expect()
         '''
         output = ''
 
-        for line in lines.split('\n'):
-            # skip empty lines
-            if line.strip() == '':
+        for line in lines.split(delimiter): 
+            # don't send empty|comment line if not raw_mode
+            cmd = line.strip()
+            if not raw_mode and (cmd == '' or cmd[0] == '#'):
                 continue
             
-            # update counter_line by +1
-            if count_line: 
-                self.counter_line += 1
-
-            # get the real cmd by parser (pys cmd will handled by parser)
-            real_cmd = self.pys_parser.parse(cmd=line)
-            
-            #print 'pysession.send(): real_cmd-->', real_cmd
-
-            re_set_timeout = re.search('!PYSCmdSetTimeout (\d+)', real_cmd)
-            re_sleep = re.search('!PYSCmdSleep (\d+)', real_cmd)
-
-            if re_set_timeout:
-                #set timeout value
-                self.timeout = re_set_timeout.group(0)
-            elif re_sleep:
-                sleep_sec = int(re_sleep.group(1))
-                PYSLib.psleep(sleep_sec, pprint=False) 
-                self.sleep_time += sleep_sec
-            elif real_cmd == '!PYSCmdSetDebguDest':
-                # set debug destination to me
-                self.set_debug_dest_to_me()
-            elif len(real_cmd.split('\n')) > 1:
-                # if receive multiple lines of cmd, from LOOP..LOOPEND
-                # self.send() but with count_line=False
-                output += self.send(lines=real_cmd, count_line=False)
-            else: 
-                # send line to device and accumulate the output 
-                output += self.send_line(line=real_cmd)
-
-        #self.print_debug_message(str(self.child), DEBUG_MSG_VERBOSE)
+            i, o = self.sendline_expect(cmd)
+            output += o
+        
         return output
 
     # ----------------------------------------------------------------------- #
@@ -915,119 +907,59 @@ class pysession:
         self.child.close()
 
 # --------------------------------------------------------------------------- #
-class PYSValue:
+class PYSConfigParser:
     """
-    Module to keep values
-    """
-    def __init__(self):
-        self.dict_value = {}
+    Local version of ConfigParser
 
-    def set_value(self, variable='', value=None):
-        '''
-        set variable/value dict pair like
-        pv.set_value(variable='$Prefix1', value='193.240.87.3')
-        '''
-        self.dict_value[variable] = value
-
-    def apply_value(self, line=''):
-        '''
-        replace $variable in line
-        '''
-        pass
-
-# --------------------------------------------------------------------------- #
-class PYSParser:
-    """
-    Command parser for each line sending to device. Now supporting:
-
-    5 DO commands:
-    1) !DO LOOP <n> 
-    2) !DO ENDLOOP
-    3) !DO SLEEP <N> SECONDS
-    4) !DO SET DEBUG DEST
-    5) !DO SET TIMEOUT 300
-
-    6 GET commands:
-    1) !GET $dest:input BY PYSLib:get_input WITH message:"please provide the dest ip of issue prefix"
+    The official ConfigParser in python doesn't take colon(:) as part of value.
+    But most login prompts like "longin:" or "username:", so have to make a 
+    wheel myself.
     """
     def __init__(self):
-        # used for !DO LOOP 10....!DO ENDLOOP
-        self.record_cmd_mode = False
-        self.loop_times = 0
-        self.list_record_cmd = []
+        # by default is DefaultValues section
+        self.dict = {}
+        self.values  = {}
 
-    def parse(self, cmd=''):
-        cmdline = cmd.strip().lower() 
+        self.dict['DefaultValues'] = {}
+        self.values['DefaultValues'] = []
 
-        #
-        # !DO LOOP 10
-        #
-        re_loop = re.match(r'^!do\s+loop\s+(\d+).*', cmdline)
-        if re_loop: 
-            self.record_cmd_mode = True
-            self.loop_times = int(re_loop.group(1))
-            self.list_record_cmd = []
-            return '!!!!! START TO RECORD CMDS !!!!!!!'
+        self.sections = ['DefaultValues']
 
-        #
-        # !DO ENDLOOP
-        #
-        re_endloop = re.match('^\!do\s+endloop.*', cmdline)
-        if re_endloop: 
-            self.record_cmd_mode = False
-            ret_list_cmds = '\n'.join(self.list_record_cmd)
-            ret_cmds = '!!!!!!!!!!!! END OF RECORD CMDS !!!!!!!!!!!!\n'
-            ret_cmds += '!\n'
-            ret_cmds += '!\n'
-            ret_cmds += '!!!!!!!!!!!! START OF LOOP EXECUTION !!!!!!!!!!!!\n'
+        self.delimiter = '='
 
-            for i in range(self.loop_times):
-                ret_cmds += '!!!!! LOOP No.%d !!!!!\n' % i
-                ret_cmds += '\n'.join(self.list_record_cmd)
-                ret_cmds += '\n'
-            ret_cmds += '!!!!!!!!!!!! END OF LOOP EXECUTION !!!!!!!!!!!!\n'
-                
-            self.list_record_cmd = []
+    def read(self, filename='./pysession.conf'):
+        with open(filename, 'r') as f:
+            conf_lines = f.readlines()
+        f.close
+       
+        section = 'DefaultValues'
 
-            return ret_cmds
+        for line in conf_lines:
+            line = line.strip()
+            if len(line) == 0 or line[0] == '#':
+                continue
 
-        #
-        # Inside LOOP, just show and record the cmd, will send them together
-        # later when seeing "!DO ENDLOOP"
-        #
-        if self.record_cmd_mode:
-            self.list_record_cmd.append(cmdline)
-            return '!!!!! RECORD No.%d CMD: %s' % (len(self.list_record_cmd), cmdline)
+            re_section = re.match('^\[(.*)\]$', line)
+            if re_section:
+                section = re_section.group(1)
 
-        #
-        # !DO sleep 100 seconds
-        #
-        re_sleep = re.match(r'^!do\s+sleep\s+(\d+)\s+sec.*', cmdline)
-        if re_sleep:
-            return '!PYSCmdSleep %s' % re_sleep.group(1)
+                if section not in self.sections: 
+                    self.sections.append(section) 
+                    self.dict[section] = {}
+                    self.values[section] = []
 
-        #
-        # !DO SET DEBUG DEST
-        #
-        re_set_debug_dest = re.match(r'^!do\s+set\s+debug\s+dest.*', cmdline)
-        if re_set_debug_dest:
-            return '!PYSCmdSetDebguDest'
-        #
-        # !DO SET TIMEOUT 60 seconds
-        #
-        re_set_timeout = re.match(r'^!do\s+set\s+timeout(\s+).*', cmdline)
-        if re_set_timeout:
-            return '!PYSCmdSetTimeout %d' % re_set_timeout.group(1)
+                continue
 
-        #
-        # !GET
-        # return this cmd back to pysession to handle
-        #
-        re_get = re.match(r'^!get\s+set\s+timeout(\s+).*', cmdline)
-        if re_get:
-            return '!PYSCmdGet %s' % cmd
+            re_key_value = re.match('(.*)%s(.*)' % self.delimiter, line)
+            if re_key_value:
+                k, v = map(str.strip, re_key_value.groups())
+                self.dict[section][k] = v
+                continue
 
-        return cmdline
+            self.values[section].append(line)
+
+            if section == 'Delimiter':
+                self.delimiter = line
 
 # --------------------------------------------------------------------------- #
 class PYSLogger:
@@ -1040,6 +972,7 @@ class PYSLogger:
         self.log = open(log_file_name, 'w')
 
     def write(self, message):
+        self.flush()
         self.terminal.write(message)
         self.log.write(message)
 
@@ -1210,14 +1143,14 @@ class PYSLib:
     
     # ----------------------------------------------------------------------- #
     @staticmethod
-    def pline1(line): 
+    def pline1(line, char='-'): 
         """
         pline1 - pretty line 1
-        >>>>>>>>>>>>>>>>>>>>>>>>> LINE <<<<<<<<<<<<<<<<<<<<<<<< 
+        ------------------------- LINE ------------------------ 
         """
-        l = len(line) 
-        ll= (76-l)/2 
-        return '%s  %s  %s' % ('>'*ll, line, '<'*(76-l-ll))
+        l = len(line) + 2
+        ll= (78-l)/2 
+        return '%s  %s  %s' % (char*ll, line, char*(78-l-ll))
 
     # ----------------------------------------------------------------------- #
     @staticmethod
@@ -1230,24 +1163,95 @@ class PYSLib:
         """
         l = len(line) 
         ll= (78-l)/2 
-        return '\n%s\n!%s%s%s\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), '!'*80)
+        return '\n%s\n!%s%s%s!\n%s' % ('!'*80, ' '*ll, line, ' '*(78-l-ll), \
+            '!'*80)
+
+"""
+Main part for pysession.py, used for quick run/test
+"""
+
+def usage():
+    print '''
+Usage: %s -C <cmdfile> -c <cmds> -s <session> -i <userid> [-p <password>] [-e <enable_password]
+
+arguments:
+    -c, --cmdlist          list of commands seperated by ; like "show ver; show int brief; show mac"
+    -C, --cmdfile          command file containing list of commands send to router
+    -s, --session          session of list of sessions separated by ; 
+                           like -s "telnet 10.1.1.1" or -s "telnet 10.3.22.1 3055; ssh -l admin gw1.company.com"
+    -u, --userid           user id
+    -p, --password         login password of user id (you can leave it blank and provide it later in non-echo way)
+    -e, --enable_password  enable password (you can leave it blank and provide it later in non-echo way)
+    ''' % sys.argv[0]
 
 if __name__ == '__main__':
-    #rtr = pysession(session='interactive')
-    #rtr = pysession(session='telnet 10.18.24.78')
-    rtr = pysession(session='telnet 10.31.168.16 3001')
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "c:C:s:u:p:e:", 
+            ["cmdlist=", "cmdfile=", "session=", "userid=", "password=",\
+             "enable_password=",])
+    except getopt.GetoptError:
+        print 'getopt error'
+        usage()
+        sys.exit(2)
+
+    # initialize the variables
+    cmds = ''
+    session_list = []
+    session, userid, password, enable_password, = '', '', '', ''
+    cmd_delimiter = '\n'
+
+    # parse the sys.argv
+    for opt, arg in opts:
+        if opt in ('-h', '--help'):
+            usage()
+        elif opt in ('-c', '--cmdlist'):
+            cmds = arg
+            cmd_delimiter = ';'
+        elif opt in ('-C', '--cmdfile'):
+            with open(arg, 'r') as f:
+                cmds = f.read()
+            f.close()
+        elif opt in ('-s', '--session'):
+            session_list = map(str.strip, arg.split(';'))
+        elif opt in ('-u', '--userid'):
+            userid = arg
+        elif opt in ('-p', '--password'):
+            password = arg
+        elif opt in ('-e', '--enable_password'):
+            enable_password = arg
+
+    if cmds == '' or len(session_list) == 0:
+        if cmds == '': 
+            print 'error: no router commands given.....'
+        
+        if len(session_list) == 0:
+            print 'error: no router sessions given.....'
+        
+        usage()
+        sys.exit(2)
+
+    print '\n' + PYSLib.pline1('List of Sessions')
+    print '\n'.join(session_list)
+
+    print '\n' + PYSLib.pline1('List of Commands')
+    print cmds
+
+    for session in session_list: 
+        router = pysession(session=session, user=userid, password=password, 
+            enable_password=enable_password)
+
+        router.send(cmds, delimiter=cmd_delimiter)
+
+        total_sec = int(time.time() - router.start_time) 
+        elapse_time = '%d min %d sec' % (total_sec/60, total_sec%60) 
+        sleep_time = '%d min %d sec' % (router.sleep_time/60, router.sleep_time%60) 
+        file_size_in_KB = '%d KB' % int(os.stat(router.log_file_name).st_size/1000)
+
+        print '\n' + PYSLib.pline2('DATA COLLECTION SUMMARY - %s' % session)
+        print '       script running time :', elapse_time
+        print '             sleeping time :', sleep_time
+        print '           number of lines :', router.counter_line
+        print '        number of commands :', router.counter_command
+        print 'number of invalid commands :', router.counter_invalid_command
+        print '   size of log output file :', file_size_in_KB
     
-    rtr.pprint = True
-
-    print '\n', '!' * 20, ' end of session establishment ', '!' * 20 
-    while True:
-        input = raw_input('\ninput command (^C to exit): ')
-
-        print '!' * 10, input, '!' * 10 
-
-        o = rtr.send(lines=input)
-
-        print '\n', '+' * 35, 'OUTPUT', '+' * 35
-        print o
-        print '=' * 80
-
