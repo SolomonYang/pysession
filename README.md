@@ -40,18 +40,22 @@ If your devices have unique/special/weird prompts, you don't need to modify the 
 Example #1, the device login prompt to ask for username is not "login:" or "username:", instead it is "Tell me who are you?". 
 
 You can edit pysession.conf file to add one line under 
-'
+```
 [Prompt.Stage.Login]
 Tell me who are you? = $user
-'
+```
 
 Example #2, the terminal server asks if you want to clear the existing session
+```
 !!! tty is being used !!!
 1 - Initiate a regular session
 2 - Quit
 Enter your option :
-
+```
 You just need to add one line like under [Prompt.Stage.Login]
+```
+[Prompt.Stage.Login]
 1 - Initiate a regular session.*Enter your option : = 1$   
+```
 _the ending $ means only sending "1" without return._
 
