@@ -9,6 +9,24 @@ pysession is based on pexpect, so in other words, it is an extension of pexpect.
 
 So as a user, you don't need to waste your efforts/time on the low-level interaction, instead you should focus on what commands to send and what output returns. 
 
+## How to use
+You can use pysessin either as a standalone tool or a python library for your own python program. 
+
+* standalone tool, actually i use this way to test the library after making any changes
+./pysession.py -s 'telnet 1.1.1.1 2001; telnet 1.1.1.1; ssh admin@1.1.1.2' -c 'show ver; show run; show ip route' -p pswd -e enablepswd
+
+Then this python script will login the sessions of -s paramenter and run the commands specified in -c argument. 
+
+* python library
+import pysession
+
+rtr = pysession(session='telnet 10.1.1.1')
+output = rtr.send('''
+show ver
+show run
+show ip route
+''')
+
 ## Self-defined prompts and handling
 If your devices have unique/special/weird prompts, you don't need to modify the script to handle them, instead just change the "pysession.conf" file. 
 
