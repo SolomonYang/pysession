@@ -10,7 +10,7 @@ pysession is based on pexpect, so in other words, it is an extension of pexpect.
 So as a user, you don't need to waste your efforts/time on the low-level interaction, instead you should focus on what commands to send and what output returns. 
 
 ## Self-defined prompts and handling
-If your devices have unique/special/weird prompts, you don't modify the script to handle them. Just change the "pysession.conf" file to include it. 
+If your devices have unique/special/weird prompts, you don't need to modify the script to handle them, instead just change the "pysession.conf" file. 
 
 Example #1, the device login prompt to ask for username is not "login:" or "username:", instead it is "Tell me who are you?". 
 
