@@ -31,8 +31,7 @@ show ip route
 ''')
 ```
 ## How to install
-Just copy the pysession.py and pysession.conf to local directory. (there should be a better/professional way, but I will deal with that later)
-
+Just copy the `pysession.py` and `pysession.conf` to local directory. (there should be a better/professional way, but I will deal with that later). Also you need python and pexpect. 
 
 ## Self-defined prompts and handling
 If your devices have unique/special/weird prompts, you don't need to modify the script to handle them, instead just change the "pysession.conf" file. 
