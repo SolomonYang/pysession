@@ -125,6 +125,8 @@ class pysession:
         self.current_prompt = ''
         self.first_time_timeout = True
 
+        self.debug_level = DEBUG_LEVEL
+
         #
         # 1. read conf file and update default values + prompt list
         #
@@ -214,7 +216,7 @@ class pysession:
         if self.jump_login() == -1:
             self.print_debug_message(
                 "E.pysession.__init__: unable to establish session [%s]"\
-                % self.session, DEBUG_MSG_ERROR)
+                % self.session, DEBUG_MSG_CRITICAL)
             self.print_debug_message(
                 "E.pysession.__init__: session info -->\n%s" % self.__str__()\
                 , DEBUG_MSG_ERROR)
@@ -233,57 +235,74 @@ class pysession:
         conf = PYSConfigParser()
         conf.read(conf_file_name)
 
-        # read default values
-        if 'DefaultValues' in conf.sections:
-            for k,v in conf.dict['DefaultValues'].iteritems():
-                if k == 'MustEnable':
-                    MUST_ENABLE = (v.lower()=='true')
-                elif k == 'LogFilePrefix':
-                    LOG_FILE_PREFIX = v
-                elif k == 'DebugLevel':
-                    DEBUG_LEVEL = int(v)
-                elif k == 'MaxRead':
-                    MAX_READ = int(v)
-                elif k == 'ShortTimeout':
-                    SHORT_TIMEOUT = int(v)
-                elif k == 'LongTimeout':
-                    LONG_TIMEOUT = int(v)
-                else:
-                    print 'E.pysession.read_conf_file(): unsupported %s, %s'\
-                        % (k, v)
+        #
+        # loop to parse every section, reporting unknown/unsupported ones
+        #
+        for s in conf.sections:
+            # defaul values
+            if s == 'DefaultValues':
+                for k,v in conf.dict['DefaultValues'].iteritems():
+                    if k == 'MustEnable':
+                        MUST_ENABLE = (v.lower()=='true')
+                    elif k == 'LogFilePrefix':
+                        LOG_FILE_PREFIX = v
+                    elif k == 'DebugLevel':
+                        DEBUG_LEVEL = int(v)
+                    elif k == 'MaxRead':
+                        MAX_READ = int(v)
+                    elif k == 'ShortTimeout':
+                        SHORT_TIMEOUT = int(v)
+                    elif k == 'LongTimeout':
+                        LONG_TIMEOUT = int(v)
+                    else:
+                        print 'E.pysession.read_conf_file(): unsupported %s, %s'\
+                            % (k, v)
+    
+            # prompt|action_list for all stages: jump|login|session|enable
+            elif s == 'Prompt.Stage.All':
+                for k,v in conf.dict['Prompt.Stage.All'].iteritems():
+                    self.prompt_list_all_stages.append(k)
+                    self.action_list_all_stages.append(v)
+   
+            # prompt|action_list for login stage
+            elif s == 'Prompt.Stage.Login':
+                for k,v in conf.dict['Prompt.Stage.Login'].iteritems():
+                    self.prompt_list_login.append(k)
+                    self.action_list_login.append(v)
+    
+            # prompt|action_list for login/console stage
+            #
+            # special one, existing console may stays at MP OS, LP console, or
+            # enable mode, send exit to return enable mode
+            elif s == 'Prompt.Stage.Login.Console':
+                for k,v in conf.dict['Prompt.Stage.Login.Console'].iteritems():
+                    self.prompt_list_login_console.append(k)
+                    self.action_list_login_console.append(v)
+    
+            # prompt|action_list for jump stage
+            elif s == 'Prompt.Stage.Jump':
+                for k,v in conf.dict['Prompt.Stage.Jump'].iteritems():
+                    self.prompt_list_jump.append(k)
+                    self.action_list_jump.append(v)
+    
+            # prompt|action_list for enable stage
+            elif s == 'Prompt.Stage.Enable':
+                for k,v in conf.dict['Prompt.Stage.Enable'].iteritems():
+                    self.prompt_enable_list.append(k)
+                    self.action_enable_list.append(v)
+    
+            # command|handling_list for special commands, see .conf file
+            elif s == 'Command.Special':
+                for k,v in conf.dict['Command.Special'].iteritems():
+                    self.command_special_list.append(k)
+                    self.handling_special_list.append(v)
 
-        # 2.2 construct prompt|action_list for all|jump|login|session
-        if 'Prompt.Stage.All' in conf.sections:
-            for k,v in conf.dict['Prompt.Stage.All'].iteritems():
-                self.prompt_list_all_stages.append(k)
-                self.action_list_all_stages.append(v)
-
-        if 'Prompt.Stage.Login' in conf.sections:
-            for k,v in conf.dict['Prompt.Stage.Login'].iteritems():
-                self.prompt_list_login.append(k)
-                self.action_list_login.append(v)
-
-        if 'Prompt.Stage.Jump' in conf.sections:
-            for k,v in conf.dict['Prompt.Stage.Jump'].iteritems():
-                self.prompt_list_jump.append(k)
-                self.action_list_jump.append(v)
-
-        if 'Prompt.Stage.Login.Console' in conf.sections:
-            for k,v in conf.dict['Prompt.Stage.Login.Console'].iteritems():
-                self.prompt_list_login_console.append(k)
-                self.action_list_login_console.append(v)
-
-        if 'Prompt.Stage.Enable' in conf.sections:
-            for k,v in conf.dict['Prompt.Stage.Enable'].iteritems():
-                self.prompt_enable_list.append(k)
-                self.action_enable_list.append(v)
-
-        # 2.3 construct command_list and handle_list
-        if 'Command.Special' in conf.sections:
-            for k,v in conf.dict['Command.Special'].iteritems():
-                self.command_special_list.append(k)
-                self.handling_special_list.append(v)
-
+            # unknown/unsupport sections
+            else:
+                self.print_debug_message( 
+                    msg='\nE.expect(): unknown sections - %s\n' % s, 
+                    msg_level=DEBUG_MSG_ERROR)
+                
     # ----------------------------------------------------------------------- #
     def print_debug_message(self, msg='', msg_level=DEBUG_MSG_VERBOSE, 
             do_repr=False):
@@ -363,7 +382,7 @@ class pysession:
 
     # ----------------------------------------------------------------------- #
     def expect(self, prompt_list=[], action_list=[], timeout=0, 
-        first_time_login=False, looking_for_prompt=True):
+        looking_for_prompt=True):
         """
         local expect wrapper with common exception handling
         """
@@ -373,134 +392,120 @@ class pysession:
         # if empty prompt_list, use self.prompt_list. This is for prompt parse
         if len(prompt_list) == 0:
             prompt_list = self.prompt_list
-            
-        if len(action_list) == 0:
             action_list = self.action_list
         
-        o_all = ''
+        output = ''
 
-        # print out expected prompts 
-        self.print_debug_message(\
-            msg='\n%s  L.expect(): prompts vs action  %s\n%s' % (
-                '-' * 25, 
-                '-' * 25,
-                PYSLib.pys_pprint(
-                    map(repr,self.prompt_list), 
-                    action_list, 
-                    action="str"
-                    ),
-                ),
-            msg_level=DEBUG_MSG_VERBOSE
-            )
-            
-        try: 
-            r = self.child.expect(prompt_list, timeout=timeout) 
-
-            self.print_debug_message(
-                msg='\n ---> %s : %s' % (repr(prompt_list[r]), action_list[r]),
-                msg_level=DEBUG_MSG_VERBOSE, 
-                )
-            
-            o_all += self.child.before + self.child.after 
-
-            while action_list[r] == '$space':
-                ''' if return $space, it is a page break, sending space''' 
-                self.child.send(' ') 
-                self.print_debug_message('\nL.pysession.expect: page break')
-
-                r = self.child.expect(prompt_list, timeout=timeout) 
-                o_all += self.child.before + self.child.after 
-
-
-            # reset self.timeout_counter
-            self.timeout_counter = 0
-
-            # clear child.after
-            self.child.after = ''
-            self.child.before= ''
-
-            return r, o_all 
-
-        except pexpect.EOF:
-            #
-            # EOF: session tear down
-            #
-            self.print_debug_message('L.pysession.expect.2: Received EOF',\
-                DEBUG_MSG_ERROR)
-
-        except pexpect.TIMEOUT:
-            # if first_time_timeout, return TIMEOUT value. For console
-            # connection to some vendor boxes, need to send an additional
-            # return(\r). 
-            # But if there is an existing console connection, this script is
-            # to take it over, then don't send a return
-            if self.first_time_timeout:
-                self.first_time_timeout = False
-
-                return pexpect.TIMEOUT, ''
-            #
-            # Timeout: increase counter and try max_allow_timeout times
-            # to get new prompt
-            #
+        # 
+        # To exit this for-ever expect loop: 
+        # 1) action_list[r]==$done; 
+        # 2) pexpect.EOF; 
+        # 3) pexpect.Timeout
+        #
+        while True:
+            # print out expected prompts 
             self.print_debug_message(\
-                '\nL.pysession.expect.2: TIMEOUT\nbefore:\n%s\nafter:\n%s'\
-                % (self.child.before, self.child.after,), \
-                DEBUG_MSG_VERBOSE)
-
-            # increment self.timeout_counter by 1
-            self.timeout_counter += 1
-
-            # if < max_allowed, try to get prompt again if there is any
-            if self.timeout_counter <= self.timeout_max_allowed and \
-                looking_for_prompt:
-                self.parse_prompt()
-            else:
-                self.print_debug_message(\
-                    'E.pysession.expect(): session timeout %d times' % \
-                        self.timeout_max_allowed, DEBUG_MSG_ERROR)
-
-        # print detailed debug 
-        self.print_debug_message(str(self.child), 0)
-
-        return -1, ''
-
-
-    # ----------------------------------------------------------------------- #
-    def _enable_(self):
-        """
-        enter into enable mode
-        """
-        self.print_debug_message(\
-            '\nL.pysession.enable():try to enter enable mode', 
-            DEBUG_MSG_VERBOSE)
-    
-        index, output = self.sendline_expect('enable', ['#', 'assword:'])
-
-        #
-        # no enable password, directly into enable mode
-        #
-        if index == 0: 
-            self.print_debug_message(
-                '\nL.pysession.enable():successfully enter enable mode', \
-                DEBUG_MSG_VERBOSE) 
-            return 1
-        #
-        # receive P|password to ask for enable_password
-        #
-        elif index == 1: 
-            if self.enable_password == '':
-                self.enable_password = \
-                    getpass.getpass('please provide enable password :')
-
-            index2, output = self.sendline_expect(self.enable_password, ['#']) 
+                msg='\n%s  L.expect(): prompts vs action  %s\n%s' % (
+                    '-' * 25, 
+                    '-' * 25,
+                    PYSLib.pys_pprint(
+                        map(repr,self.prompt_list), 
+                        action_list, 
+                        action="str"
+                        ),
+                    ),
+                msg_level=DEBUG_MSG_VERBOSE
+                )
                 
-            if index2 == 0: 
-                self.print_debug_message('successfully enter enable mode', \
-                    DEBUG_MSG_VERBOSE)
-                return 1
+            try: 
+                r = self.child.expect(prompt_list, timeout=timeout) 
     
-        return -1
+                self.print_debug_message(
+                    msg='\n ---> %s : %s' % (
+                        repr(prompt_list[r]), 
+                        action_list[r]
+                        ),
+                    msg_level=DEBUG_MSG_VERBOSE, 
+                    )
+                
+                output += self.child.before + self.child.after 
+    
+                if action_list[r] == '$done' or \
+                    action_list[r] == '$user' or \
+                    action_list[r] == '$enable' or \
+                    action_list[r] == '$password':
+                    ''' $done prompt gotten, reset counter and return '''
 
+                    # reset self.timeout_counter
+                    self.timeout_counter = 0
+        
+                    # clear child.after
+                    # self.child.after = '' 
+                    # self.child.before= ''
+        
+                    return r, output 
+
+                elif action_list[r] == '$space':
+                    ''' if return $space, it is a page break, sending space''' 
+                    self.print_debug_message(
+                        msg='\nL.pysession.expect: page break', 
+                        msg_level=DEBUG_MSG_VERBOSE,
+                        )
+                    self.child.send(' ') 
+                else:    
+                    '''else means unknown action, send $action,YG'''
+                    print action_list[r]
+                    if action_list[r][-1] == '$': 
+                        self.child.send(self.action_list[r][:-1]) 
+                    else: 
+                        self.child.send(self.action_list[r] + self.EOL)
+
+            except pexpect.EOF:
+                #
+                # EOF: session tear down
+                #
+                self.print_debug_message('L.pysession.expect.2: Received EOF',\
+                    DEBUG_MSG_ERROR)
+
+                return pexpect.EOF, output
+    
+            except pexpect.TIMEOUT:
+                #
+                # If first_time_timeout, don't parse promt but return TIMEOUT
+                # 
+                # Only for jump_login(), console connection for some vendor 
+                # boxes, need to send an additional return in jump_login()
+                #
+                # otherwise parse_prompt if timeout for first 3 times. 
+                #
+                if self.first_time_timeout:
+                    self.first_time_timeout = False
+    
+                    return pexpect.TIMEOUT, output
+                #
+                # Timeout: increase counter and try max_allow_timeout times
+                # to get new prompt
+                #
+
+                # increment self.timeout_counter by 1
+                self.timeout_counter += 1
+
+                self.print_debug_message(
+                    '\nL.expect(): TIMEOUT %d times\nbefore:\n%s\nafter:\n%s'\
+                    % (self.timeout_counter, self.child.before, \
+                    self.child.after,), DEBUG_MSG_VERBOSE)
+    
+                # if < max_allowed, try to get prompt again if there is any
+                if self.timeout_counter <= self.timeout_max_allowed and \
+                    looking_for_prompt:
+                    self.parse_prompt()
+                
+                return pexpect.TIMEOUT, output
+    
+            # print detailed debug 
+            # self.print_debug_message(str(self.child), 0)
+            return -1, ''
+    
     # ----------------------------------------------------------------------- #
     def get_user(self):
         """
@@ -588,24 +593,29 @@ class pysession:
             if r == pexpect.TIMEOUT:
                 self.child.send(self.EOL)
                 continue
+            elif r == pexpect.EOF or (type(r) is int and r == -1):
+                self.print_debug_message(
+                    '\nE.jump_login(): critical error, exiting...', 
+                    DEBUG_MSG_CRITICAL)
+                sys.exit(1) 
                 
             # print out debug msg
-            _action_list = self.action_list[:]
-            
-            if type(r) == int and r < len(_action_list): 
-                _action_list[r] = '--->  ' + _action_list[r] 
+            #_action_list = self.action_list[:]
+            #
+            #if type(r) == int and r < len(_action_list): 
+            #    _action_list[r] = '--->  ' + _action_list[r] 
 
-            self.print_debug_message(\
-                msg='\n%s  L.connect: prompts vs action  %s\n%s' % (
-                    '-' * 25, 
-                    '-' * 25,
-                    PYSLib.pys_pprint(
-                        map(repr,self.prompt_list), 
-                        _action_list,
-                        action="str"),
-                    ),
-                msg_level=DEBUG_MSG_VERBOSE
-                )
+            #self.print_debug_message(\
+            #    msg='\n%s  L.connect: prompts vs action  %s\n%s' % (
+            #        '-' * 25, 
+            #        '-' * 25,
+            #        PYSLib.pys_pprint(
+            #            map(repr,self.prompt_list), 
+            #            _action_list,
+            #            action="str"),
+            #        ),
+            #    msg_level=DEBUG_MSG_VERBOSE
+            #    )
             
             if self.action_list[r] == '$done':
                 if self.stage == 'jump':
@@ -639,7 +649,7 @@ class pysession:
                 '-' * 25, 
                 PYSLib.pys_pprint( 
                     map(repr,self.prompt_list), 
-                    _action_list, 
+                    self.action_list, 
                     action="str"
                     )
                 ),
@@ -823,32 +833,6 @@ class pysession:
         return False
     
     # ----------------------------------------------------------------------- #
-    def is_command_enable(self, cmd=''):
-        '''
-        search self.command_special_list one by one to see if cmd is enable
-        '''
-        cmd = cmd.strip().lower()
-
-        for c, h in zip(self.command_special_list, 
-            self.handling_special_list):
-            if re.match(c, cmd) and h == '$enable':
-                return True
-                
-        return False
-
-    # ----------------------------------------------------------------------- #
-    def is_command_debug(self, cmd=''):
-        '''
-        to check if cmd is debug command
-        '''
-        cmd = cmd.strip().lower() 
-        
-        if re.search('^deb', cmd):
-            return True
-       
-        return False
-
-    # ----------------------------------------------------------------------- #
     def sendline(self, line): 
         """
         send line + EOL
@@ -869,16 +853,16 @@ class pysession:
             (line, prompt_changed, is_enable, is_debug), DEBUG_MSG_VERBOSE)
 
         if is_enable:
-            self.stage = 'enable'
-        else:
-            if is_debug:
-                o += self.set_debug_dest_to_me()
+            self.stage = 'enable' 
 
-            self.child.send(line + self.EOL)
+        if is_debug: 
+            o += self.set_debug_dest_to_me()
 
-            if prompt_changed: 
-                o += self.parse_prompt()
-                self.make_prompt_action_list()
+        self.child.send(line + self.EOL)
+
+        if prompt_changed: 
+            o += self.parse_prompt() 
+            self.make_prompt_action_list()
             
         return o
 
@@ -920,6 +904,7 @@ class pysession:
             self.counter_invalid_command += 1
 
         return o
+    
     # ----------------------------------------------------------------------- #
     def send(self, lines='', delimiter='\n', raw_mode=True):
         '''
@@ -937,7 +922,11 @@ class pysession:
             cmd = line.strip()
             if not raw_mode and (cmd == '' or cmd[0] == '#'):
                 continue
-            
+    
+            self.print_debug_message(
+                msg='\n\nsending cmd[%s] to device...\n' % line,
+                msg_level=DEBUG_MSG_VERBOSE)
+
             o = self.sendline_expect(cmd)
             output += o
         
