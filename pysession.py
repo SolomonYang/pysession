@@ -484,28 +484,32 @@ class pysession:
                 #
                 # otherwise parse_prompt if timeout for first 3 times. 
                 #
-                if self.stage == 'login' or self.stage == 'jump': 
-                    self.login_timeout_counter += 1
-                    if self.login_timeout_counter == 1:
-                        self.print_debug_message(
-                            'L.expect(): send "n" bcoz 1st timeout', 
-                            DEBUG_MSG_ERROR)
-    
-                        self.child.send('n')
-                        return pexpect.TIMEOUT, output
-    
-                    elif self.login_timeout_counter == 2:
-                        self.print_debug_message(
-                            'L.expect(): send EOL bcoz 2st timeout', 
-                            DEBUG_MSG_ERROR)
-    
-                        self.child.send(self.EOL) 
-                        return pexpect.TIMEOUT, output
+                #if self.stage == 'login' or self.stage == 'jump': 
+                #    self.login_timeout_counter += 1
+                #    if self.login_timeout_counter == 1:
+                #        self.print_debug_message(
+                #            'L.expect(): send "n" bcoz 1st timeout', 
+                #            DEBUG_MSG_ERROR)
+                # 
+                #        self.child.send('n')
+                #        return pexpect.TIMEOUT, output
+                # 
+                #    elif self.login_timeout_counter == 2:
+                #        self.print_debug_message(
+                #            'L.expect(): send EOL bcoz 2st timeout', 
+                #            DEBUG_MSG_ERROR)
+                # 
+                #        self.child.send(self.EOL) 
+                #        return pexpect.TIMEOUT, output
+
                 #
                 # Timeout: increase counter and try max_allow_timeout times
                 # to get new prompt
                 #
-                elif looking_for_prompt:
+                if looking_for_prompt:
+                    self.child.sendcontrol('c') 
+                    #self.child.send(self.EOL) 
+
                     # increment self.timeout_counter by 1
                     self.timeout_counter += 1
     
@@ -710,8 +714,12 @@ class pysession:
             action_list=self.action_enable_list,
             )
 
-        # parse_prompt.3: parse the last line to get prompt
-        prompt_line = o.split('\n')[-1].strip()
+        # parse_prompt.3: parse the last non-empty line to get prompt
+        prompt_line = ''
+        for l in reversed(o.split('\n')):
+            prompt_line = l.strip()
+            if len(prompt_line):
+                break 
 
         self.print_debug_message(\
             '\nL.parse_prompt(): prompt line=[%s]' % prompt_line, 
@@ -960,7 +968,7 @@ class pysession:
                 continue
     
             self.print_debug_message(
-                msg='\n\nsending cmd[%s] to device...\n' % line,
+                msg='\n\nsending cmd[%s] to device...\n' % cmd,
                 msg_level=DEBUG_MSG_VERBOSE)
 
             o = self.sendline_expect(cmd)
