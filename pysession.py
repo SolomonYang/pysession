@@ -141,6 +141,7 @@ class pysession:
             self.timeout = SHORT_TIMEOUT
 
         self.timeout_counter = 0
+        self.login_timeout_counter = 0
         self.timeout_max_allowed = 5
 
         # for Brocade NI/FI platform, set debug destination to current session
@@ -441,8 +442,8 @@ class pysession:
                     self.timeout_counter = 0
         
                     # clear child.after
-                    # self.child.after = '' 
-                    # self.child.before= ''
+                    self.child.after = '' 
+                    self.child.before= ''
         
                     return r, output 
 
@@ -461,7 +462,6 @@ class pysession:
                         msg_level=DEBUG_MSG_VERBOSE,
                         )
                     if action_list[r][-1] == '$': 
-                        #self.first_time_timeout = True
                         self.child.send(self.action_list[r][:-1]) 
                     else: 
                         self.child.send(self.action_list[r] + self.EOL)
@@ -484,10 +484,23 @@ class pysession:
                 #
                 # otherwise parse_prompt if timeout for first 3 times. 
                 #
-                if self.first_time_timeout:
-                    self.first_time_timeout = False
-                    self.child.send(self.EOL) 
-                    return pexpect.TIMEOUT, output
+                if self.stage == 'login' or self.stage == 'jump': 
+                    self.login_timeout_counter += 1
+                    if self.login_timeout_counter == 1:
+                        self.print_debug_message(
+                            'L.expect(): send "n" bcoz 1st timeout', 
+                            DEBUG_MSG_ERROR)
+    
+                        self.child.send('n')
+                        return pexpect.TIMEOUT, output
+    
+                    elif self.login_timeout_counter == 2:
+                        self.print_debug_message(
+                            'L.expect(): send EOL bcoz 2st timeout', 
+                            DEBUG_MSG_ERROR)
+    
+                        self.child.send(self.EOL) 
+                        return pexpect.TIMEOUT, output
                 #
                 # Timeout: increase counter and try max_allow_timeout times
                 # to get new prompt
@@ -598,9 +611,13 @@ class pysession:
 
             # if return pexpect.TIMEOUT, just send a \r
             if r == pexpect.TIMEOUT:
+                if self.timeout_counter > self.timeout_max_allowed: 
+                    self.print_debug_message( 
+                        '\nE.jump_login(): timeout, exiting...', 
+                        DEBUG_MSG_CRITICAL)
+                    sys.exit(1) 
                 continue
             elif r == pexpect.EOF or (type(r) is int and r == -1):
-                print r
                 self.print_debug_message(
                     '\nE.jump_login(): critical error, exiting...', 
                     DEBUG_MSG_CRITICAL)
@@ -795,7 +812,7 @@ class pysession:
             return True, 'console', \
                 ':'.join(re_console_found.groups()), ''
      
-        return False, '', '', '', ''
+        return False, '', '', ''
 
     # ----------------------------------------------------------------------- #
     def set_debug_dest_to_me(self):
@@ -861,6 +878,7 @@ class pysession:
         prompt_changed = self.is_command(cmd=line, type='$promptchange')
         is_enable = self.is_command(cmd=line, type='$enable')
         is_debug = self.is_command(cmd=line, type='$debug')
+        is_nowait = self.is_command(cmd=line, type='$nowait')
 
         self.print_debug_message(\
             'L.sendline(): line=[%s], Prompt:%r, Enable:%r, Debug:%r' % \
@@ -910,7 +928,7 @@ class pysession:
         o1 = self.sendline(line)
 
         # if it is reload command, short timeout + no prompt parse
-        if self.is_command(cmd=line, type='$reload'):
+        if self.is_command(cmd=line, type='$nowait'):
             r, o = self.expect(timeout=5, looking_for_prompt=False)
         else: 
             r, o = self.expect()
