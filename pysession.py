@@ -421,7 +421,8 @@ class pysession:
                 r = self.child.expect(prompt_list, timeout=timeout) 
     
                 self.print_debug_message(
-                    msg='\n ---> %s : %s' % (
+                    msg='\nL.expect(): ---> %d/%s : %s' % (
+                        r, 
                         repr(prompt_list[r]), 
                         action_list[r]
                         ),
@@ -454,8 +455,13 @@ class pysession:
                     self.child.send(' ') 
                 else:    
                     '''else means unknown action, send $action,YG'''
-                    print action_list[r]
+
+                    self.print_debug_message(
+                        msg='\nL.pysession.expect: sending %s' % action_list[r], 
+                        msg_level=DEBUG_MSG_VERBOSE,
+                        )
                     if action_list[r][-1] == '$': 
+                        #self.first_time_timeout = True
                         self.child.send(self.action_list[r][:-1]) 
                     else: 
                         self.child.send(self.action_list[r] + self.EOL)
@@ -480,31 +486,32 @@ class pysession:
                 #
                 if self.first_time_timeout:
                     self.first_time_timeout = False
-    
+                    self.child.send(self.EOL) 
                     return pexpect.TIMEOUT, output
                 #
                 # Timeout: increase counter and try max_allow_timeout times
                 # to get new prompt
                 #
-
-                # increment self.timeout_counter by 1
-                self.timeout_counter += 1
-
-                self.print_debug_message(
-                    '\nL.expect(): TIMEOUT %d times\nbefore:\n%s\nafter:\n%s'\
-                    % (self.timeout_counter, self.child.before, \
-                    self.child.after,), DEBUG_MSG_VERBOSE)
+                elif looking_for_prompt:
+                    # increment self.timeout_counter by 1
+                    self.timeout_counter += 1
     
-                # if < max_allowed, try to get prompt again if there is any
-                if self.timeout_counter <= self.timeout_max_allowed and \
-                    looking_for_prompt:
-                    self.parse_prompt()
-                
-                return pexpect.TIMEOUT, output
-    
-            # print detailed debug 
-            # self.print_debug_message(str(self.child), 0)
-            return -1, ''
+                    self.print_debug_message(
+                        '\nL.expect(): TIMEOUT %d times\nbefore:\n%s\nafter:\n%s'\
+                        % (self.timeout_counter, self.child.before, \
+                        self.child.after,), DEBUG_MSG_VERBOSE)
+        
+                    # if < max_allowed, try to get prompt again if there is any
+                    if self.timeout_counter <= self.timeout_max_allowed:
+                        output += self.parse_prompt() 
+                        self.make_prompt_action_list()
+                    else: 
+                        return pexpect.TIMEOUT, output
+                else: 
+                    return pexpect.TIMEOUT, output
+        # print detailed debug 
+        # self.print_debug_message(str(self.child), 0)
+        return -1, ''
     
     # ----------------------------------------------------------------------- #
     def get_user(self):
@@ -591,9 +598,9 @@ class pysession:
 
             # if return pexpect.TIMEOUT, just send a \r
             if r == pexpect.TIMEOUT:
-                self.child.send(self.EOL)
                 continue
             elif r == pexpect.EOF or (type(r) is int and r == -1):
+                print r
                 self.print_debug_message(
                     '\nE.jump_login(): critical error, exiting...', 
                     DEBUG_MSG_CRITICAL)
@@ -623,8 +630,6 @@ class pysession:
                     self.stage = 'login'
                 else:    
                     break
-            elif self.action_list[r] == '$space':
-                self.child.send(' ')
             elif self.action_list[r] == '$user': 
                 self.child.send(self.get_user() + self.EOL)
             elif self.action_list[r] == '$password':
@@ -633,10 +638,19 @@ class pysession:
                 self.stage = 'enable'
                 self.child.send('enable' + self.EOL)
             else:
-                if self.action_list[r][-1] == '$':
-                    self.child.send(self.action_list[r][:-1])
-                else:
-                    self.child.send(self.action_list[r] + self.EOL)
+                self.print_debug_message(\
+                    msg='\nE.connect: unknown action, %d/%s' % \
+                        (r, self.action_list[r]), 
+                    msg_level=DEBUG_MSG_ERROR
+                    )
+
+            #elif self.action_list[r] == '$space':
+            #    self.child.send(' ')
+            #else:
+            #    if self.action_list[r][-1] == '$':
+            #        self.child.send(self.action_list[r][:-1])
+            #    else:
+            #        self.child.send(self.action_list[r] + self.EOL)
 
         self.parse_prompt()
 
@@ -895,7 +909,11 @@ class pysession:
 
         o1 = self.sendline(line)
 
-        r, o = self.expect()
+        # if it is reload command, short timeout + no prompt parse
+        if self.is_command(cmd=line, type='$reload'):
+            r, o = self.expect(timeout=5, looking_for_prompt=False)
+        else: 
+            r, o = self.expect()
 
         if need_prettylog:
             sys.stdout.write(close_line)
@@ -1277,7 +1295,7 @@ if __name__ == '__main__':
         sleep_time = '%d min %d sec' % (router.sleep_time/60, router.sleep_time%60) 
         file_size_in_KB = '%d KB' % int(os.stat(router.log_file_name).st_size/1000)
 
-        print '\n' + PYSLib.pline2('DATA COLLECTION SUMMARY - %s' % session)
+        print '\n' + PYSLib.pline2('SUMMARY - %s' % session)
         print '       script running time :', elapse_time
         print '             sleeping time :', sleep_time
         print '           number of lines :', router.counter_line
