@@ -484,7 +484,8 @@ class pysession:
                 #
                 # otherwise parse_prompt if timeout for first 3 times. 
                 #
-                #if self.stage == 'login' or self.stage == 'jump': 
+                if self.stage == 'login' or self.stage == 'jump': 
+                    return pexpect.TIMEOUT, output
                 #    self.login_timeout_counter += 1
                 #    if self.login_timeout_counter == 1:
                 #        self.print_debug_message(
@@ -620,7 +621,10 @@ class pysession:
                         '\nE.jump_login(): timeout, exiting...', 
                         DEBUG_MSG_CRITICAL)
                     sys.exit(1) 
-                continue
+                else:
+                    self.timeout_counter += 1
+                    self.child.sendcontrol('c')
+                    continue
             elif r == pexpect.EOF or (type(r) is int and r == -1):
                 self.print_debug_message(
                     '\nE.jump_login(): critical error, exiting...', 
