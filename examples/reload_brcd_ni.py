@@ -27,6 +27,7 @@ def reload_brcd_ni(session='', tftp_ip='', cfg_file='', ip='', mask='', gw=''):
             end
         ''' % (ip, mask, tftp_ip, gw))
     rtr.send('copy tftp startup-config %s %s' % (tftp_ip, cfg_file))
+    PYSLib.psleep(5)
     rtr.send('reload')
  
 def usage():

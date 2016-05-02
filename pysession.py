@@ -37,9 +37,10 @@ CR   = '\r'
 LF   = '\n'
 CRLF = '\r\n'
 
-CONF_FILENAME   = './pysession.conf'
+CONF_FILENAME   = '/home/administrator/solomon/pysession/pysession.conf'
 MUST_ENABLE     = True
 LOG_FILE_PREFIX = 'pys__'
+LOG_FILE_DIR    = '/tmp'
 MAX_READ        = 327680
 SHORT_TIMEOUT   = 15
 LONG_TIMEOUT    = 120
@@ -85,6 +86,7 @@ class pysession:
                  \
                  output_file='', 
                  log_file_prefix='', 
+                 log_file_dir='', 
                  timeout=None,
                  debug_level=None, 
                  conf_file=CONF_FILENAME,
@@ -165,9 +167,12 @@ class pysession:
         # session must go to enable mode, if False, login at > then leave
         self.must_enable = MUST_ENABLE
 
-        # session log file prefix
+        # session log file prefix/dir
         if log_file_prefix == '':
             log_file_prefix = LOG_FILE_PREFIX
+
+        if log_file_dir == '':
+            log_file_dir = LOG_FILE_DIR
 
         # debug level, the higher, the more verbose, default is 0, which 
         # means none debug
@@ -206,8 +211,9 @@ class pysession:
         # create log_file_name
         self.log_file_name = output_file
         if self.log_file_name == '': 
-            self.log_file_name = log_file_prefix + self.hostname + '__' + \
-                datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
+            self.log_file_name = self.log_file_dir + '/' + \
+                    self.log_file_prefix + self.hostname + '__' + \
+                    datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
 
         sys.stdout = PYSLogger(self.log_file_name)
 
@@ -230,8 +236,8 @@ class pysession:
         command/handling info. In this way, no need to hard code every
         possible prompts in py file, but user can define themselves. 
         '''
-        global MUST_ENABLE, LOG_FILE_PREFIX, DEBUG_LEVEL, MAX_READ, \
-            SHORT_TIMEOUT, LONG_TIMEOUT
+        global MUST_ENABLE, LOG_FILE_PREFIX, LOG_FILE_DIR, DEBUG_LEVEL, \
+            MAX_READ, SHORT_TIMEOUT, LONG_TIMEOUT
 
         conf = PYSConfigParser()
         conf.read(conf_file_name)
@@ -247,6 +253,8 @@ class pysession:
                         MUST_ENABLE = (v.lower()=='true')
                     elif k == 'LogFilePrefix':
                         LOG_FILE_PREFIX = v
+                    elif k == 'LogFileDir':
+                        LOG_FILE_DIR = v
                     elif k == 'DebugLevel':
                         DEBUG_LEVEL = int(v)
                     elif k == 'MaxRead':
@@ -1005,7 +1013,7 @@ class PYSConfigParser:
 
         self.delimiter = '='
 
-    def read(self, filename='./pysession.conf'):
+    def read(self, filename='pysession.conf'):
         with open(filename, 'r') as f:
             conf_lines = f.readlines()
         f.close
@@ -1045,7 +1053,7 @@ class PYSLogger:
     local logger module, with this we can output to 2 stdout and pysession
     log file
     """
-    def __init__(self, log_file_name="pys_log_file"):
+    def __init__(self, log_file_name="/tmp/pys_log_file"):
         self.terminal = sys.stdout
         self.log = open(log_file_name, 'w')
 
