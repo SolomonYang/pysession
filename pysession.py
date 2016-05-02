@@ -211,8 +211,8 @@ class pysession:
         # create log_file_name
         self.log_file_name = output_file
         if self.log_file_name == '': 
-            self.log_file_name = self.log_file_dir + '/' + \
-                    self.log_file_prefix + self.hostname + '__' + \
+            self.log_file_name = log_file_dir + '/' + log_file_prefix + \
+                    self.hostname + '__' + \
                     datetime.now().strftime("%Y%m%d__%H:%M:%S") + '.log'
 
         sys.stdout = PYSLogger(self.log_file_name)
@@ -895,7 +895,7 @@ class pysession:
         # all output
         o = ''
 
-        prompt_changed = self.is_command(cmd=line, type='$promptchange')
+        prompt_changed = self.is_command(cmd=line, type='$changeprompt')
         is_enable = self.is_command(cmd=line, type='$enable')
         is_debug = self.is_command(cmd=line, type='$debug')
         is_nowait = self.is_command(cmd=line, type='$nowait')
