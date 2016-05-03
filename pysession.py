@@ -418,7 +418,7 @@ class pysession:
                     '-' * 25, 
                     '-' * 25,
                     PYSLib.pys_pprint(
-                        map(repr,self.prompt_list), 
+                        map(repr,prompt_list), 
                         action_list, 
                         action="str"
                         ),
@@ -531,8 +531,7 @@ class pysession:
                     if self.timeout_counter <= self.timeout_max_allowed:
                         output += self.parse_prompt() 
                         self.make_prompt_action_list()
-                    else: 
-                        return pexpect.TIMEOUT, output
+                    return pexpect.TIMEOUT, output
                 else: 
                     return pexpect.TIMEOUT, output
         # print detailed debug 
@@ -720,6 +719,7 @@ class pysession:
         if send_EOL:
             self.child.send(self.EOL) 
 
+        #import pdb; pdb.set_trace()
         # parse_prompt.2: expect one of self.prompt_enable_list
         r, o = self.expect(
             prompt_list=self.prompt_enable_list, 
@@ -913,7 +913,7 @@ class pysession:
         self.child.send(line + self.EOL)
 
         if prompt_changed: 
-            o += self.parse_prompt() 
+            o += self.parse_prompt(send_EOL=False) 
             self.make_prompt_action_list()
             
         return o
