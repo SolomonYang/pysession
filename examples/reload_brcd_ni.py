@@ -18,16 +18,16 @@ def reload_brcd_ni(session='', tftp_ip='', cfg_file='', ip='', mask='', gw=''):
 
     if ip != '':
         rtr.send('''
+            enable
             conf term
             int management 1
             ip addre %s/%s
-            enable
             exit
             ip route %s 255.255.255.255 %s
             end
         ''' % (ip, mask, tftp_ip, gw))
     rtr.send('copy tftp startup-config %s %s' % (tftp_ip, cfg_file))
-    PYSLib.psleep(5)
+    time.sleep(5)
     rtr.send('reload')
  
 def usage():
