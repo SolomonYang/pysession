@@ -583,14 +583,14 @@ class pysession:
             self.prompt_list += self.prompt_list_login 
             self.action_list += self.action_list_login
 
-        elif self.stage == 'done': 
+        else:
             self.prompt_list.append(self.current_prompt)
             self.action_list.append('$done')
 
-        else:
-            self.print_debug_message(
-                'E.update_prompt_action_list: unknown stage [%s]'
-                % self.stage, DEBUG_MSG_ERROR)
+        #elif self.stage == 'done': 
+        #    self.print_debug_message(
+        #        'E.update_prompt_action_list: unknown stage [%s]'
+        #        % self.stage, DEBUG_MSG_ERROR)
             
     # ----------------------------------------------------------------------- #
     def jump_login(self):
