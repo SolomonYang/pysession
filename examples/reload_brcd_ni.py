@@ -9,9 +9,19 @@ This script is to reload Brocade NetIron rotuer
 4) session after 3 min sleep
 '''
 
+import os
 import sys
 import getopt
-from pysession import *
+try: 
+    from pysession import *
+except:
+    try: 
+        sys.path.insert(1, os.path.join(sys.path[0], '..'))
+        from pysession import *
+    except:
+        sys.stderr.write("Error: can't import pysession module\n")
+        exit(1)
+
 
 def reload_brcd_ni(session='', tftp_ip='', cfg_file='', ip='', mask='', gw=''):
     rtr = pysession(session=session)

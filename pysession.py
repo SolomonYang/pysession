@@ -37,7 +37,7 @@ CR   = '\r'
 LF   = '\n'
 CRLF = '\r\n'
 
-CONF_FILENAME   = '/home/administrator/solomon/pysession/pysession.conf'
+CONF_FILENAME   = os.path.join(sys.path[0], 'pysession.conf')
 MUST_ENABLE     = True
 LOG_FILE_PREFIX = 'pys__'
 LOG_FILE_DIR    = '/tmp'
