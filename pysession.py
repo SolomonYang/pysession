@@ -297,9 +297,9 @@ class pysession:
     
             # command|handling_list for special commands, see .conf file
             elif s == 'Command.Special':
-                for k,v in conf.dict['Command.Special'].iteritems():
-                    self.command_special_list.append(k)
-                    self.handling_special_list.append(v)
+                for v in conf.values['Command.Special']:
+                    self.command_special_list.append(v[0])
+                    self.handling_special_list.append(v[1])
 
             # unknown/unsupport sections
             else:
@@ -386,7 +386,7 @@ class pysession:
 
     # ----------------------------------------------------------------------- #
     def expect(self, prompt_list=[], action_list=[], timeout=0, 
-        looking_for_prompt=True):
+            looking_for_prompt=True):
         """
         local expect wrapper with common exception handling
         """
@@ -409,17 +409,21 @@ class pysession:
         while True:
             # print out expected prompts 
             self.print_debug_message(\
-                msg='\n%s  L.expect(): prompts vs action  %s\n%s' % (
-                    '-' * 25, 
-                    '-' * 25,
+                msg='\n%s  L.expect(): prompts vs action  %s\n%s\n%s' % (
+                    '~' * 25, 
+                    '~' * 25,
                     PYSLib.pys_pprint(
                         map(repr,prompt_list), 
                         action_list, 
                         action="str"
                         ),
+                    '+' * 80,
                     ),
                 msg_level=DEBUG_MSG_VERBOSE
                 )
+                #YG
+                #msg_level=DEBUG_MSG_VERBOSE
+                #msg_level=0
                 
             try: 
                 r = self.child.expect(prompt_list, timeout=timeout) 
@@ -432,6 +436,9 @@ class pysession:
                         ),
                     msg_level=DEBUG_MSG_VERBOSE, 
                     )
+                    #YG
+                    #msg_level=0
+                    #msg_level=DEBUG_MSG_VERBOSE, 
                 
                 output += self.child.before + self.child.after 
     
@@ -439,6 +446,7 @@ class pysession:
                     action_list[r] == '$done'        or \
                     action_list[r] == '$password'    or \
                     action_list[r] == '$user_mode'   or \
+                    action_list[r] == '$lp_mode'     or \
                     action_list[r] == '$config_mode' or \
                     action_list[r] == '$privilaged_mode':
                     ''' expected prompt gotten, reset counter and return '''
@@ -528,6 +536,8 @@ class pysession:
                     if self.timeout_counter <= self.timeout_max_allowed:
                         output += self.parse_prompt() 
                         self.update_prompt_action_list()
+                        prompt_list = self.prompt_list 
+                        action_list = self.action_list
                     return pexpect.TIMEOUT, output
                 else: 
                     return pexpect.TIMEOUT, output
@@ -554,13 +564,13 @@ class pysession:
         """
         if self.stage == 'jump':
             return self.get_info_or_interactive(self.jump_password, \
-                msg="Please provide jump user password: ", is_pswd=True)
+                msg="\nPlease provide jump user password: ", is_pswd=True)
         elif self.stage == 'login':
             return self.get_info_or_interactive(self.password, \
-                msg="Please provide login password: ", is_pswd=True)
+                msg="\nPlease provide login password: ", is_pswd=True)
         else:
             return self.get_info_or_interactive(self.enable_password, \
-                msg="Please provide enable password: ", is_pswd=True)
+                msg="\nPlease provide enable password: ", is_pswd=True)
 
     # ----------------------------------------------------------------------- #
     def update_prompt_action_list(self):
@@ -579,11 +589,11 @@ class pysession:
                 self.prompt_list += self.prompt_list_login_console 
                 self.action_list += self.action_list_login_console
 
-        elif self.stage == 'enable':
+        #elif self.stage == 'enable':
+        else:
             self.prompt_list += self.prompt_list_login 
             self.action_list += self.action_list_login
 
-        else:
             self.prompt_list.append(self.current_prompt)
             self.action_list.append('$done')
 
@@ -721,6 +731,8 @@ class pysession:
             '\nL.parse_prompt(): prompt line=[%s]' % prompt_line, 
             DEBUG_MSG_VERBOSE
             )
+            #YG
+            #DEBUG_MSG_VERBOSE
 
         #
         # looking for config prompt 'telnet@hostname(config-if-e10000-1/5)#'
@@ -762,8 +774,11 @@ class pysession:
             
             host = prompt_line
             prompt_char = ''
-        
-        self.current_prompt = '%s[^\n]*%s' % (host, prompt_char) 
+      
+        if re.match('^LP-\d+', host): 
+            self.current_prompt = prompt_line
+        else:
+            self.current_prompt = '%s[^\n]*%s' % (host, prompt_char) 
         
         self.print_debug_message(\
             'L.parse_prompt: current prompt = [%s]' % \
@@ -832,7 +847,7 @@ class pysession:
         
         self.debug_dest_to_me = True
 
-        output = self.send_line('show who')
+        output = self.sendline('show who')
 
         session = ''
         session_num = ''
@@ -854,7 +869,7 @@ class pysession:
             if re_you_conn:
                 break
 
-        self.send_line('debug destination %s %s' % (session, session_num))
+        self.sendline('debug destination %s %s' % (session, session_num))
         
     # ----------------------------------------------------------------------- #
     def is_command(self, cmd='', type='$changeprompt'):
@@ -871,11 +886,11 @@ class pysession:
         return False
     
     # ----------------------------------------------------------------------- #
-    def sendline(self, line): 
+    def sendline(self, line, set_debug_dest=True):
         """
         send line + EOL
         """
-        #if 'reload' in line: import pdb; pdb.set_trace()
+        #if 'enable' in line: import pdb; pdb.set_trace()
         #if 'tftp' in line: import pdb; pdb.set_trace()
 
         # increase cmd counter
@@ -892,23 +907,31 @@ class pysession:
         self.print_debug_message(\
             'L.sendline(): line=[%s], Prompt:%r, Enable:%r, Debug:%r' % \
             (line, prompt_changed, is_enable, is_debug), DEBUG_MSG_VERBOSE)
+            #YG
+            #DEBUG_MSG_VERBOSE)
 
         if is_enable:
             self.stage = 'enable' 
 
-        if is_debug: 
+        # if cmd="deb pack cap", set_debug_dest should be false, no need to
+        # set debug dest to me
+        if is_debug and set_debug_dest:
             o += self.set_debug_dest_to_me()
 
         self.child.send(line + self.EOL)
 
         if prompt_changed: 
             o += self.parse_prompt(send_EOL=False) 
-            self.update_prompt_action_list()
+            #YG
+            #self.update_prompt_action_list()
+            #print '%s: change and parse prompt @ stage: %s' % (line, self.stage)
+            #print self.prompt_list
+            #print self.action_list
             
         return o
 
     # ----------------------------------------------------------------------- #
-    def sendline_expect(self, line):
+    def sendline_expect(self, line, set_debug_dest=True, timeout=0):
         """
         sendline + expect
         """ 
@@ -934,13 +957,17 @@ class pysession:
        
             sys.stdout.write(open_line)
 
-        o1 = self.sendline(line)
+        o1 = self.sendline(line, set_debug_dest=set_debug_dest)
 
-        # if it is reload command, short timeout + no prompt parse
-        if self.is_command(cmd=line, type='$nowait'):
-            r, o = self.expect(timeout=5, looking_for_prompt=False)
+        # if it is prompt change cmd, no need to expect, done by parse_prompt()
+        # YG
+        if self.is_command(cmd=line, type='$changeprompt'):
+            o = o1 
+        # if it is reload command, short timeout + no prompt parse 
+        elif self.is_command(cmd=line, type='$nowait'): 
+            r, o = self.expect(timeout=5, looking_for_prompt=False) 
         else: 
-            r, o = self.expect()
+            r, o = self.expect(timeout=timeout)
 
         if need_prettylog:
             sys.stdout.write(close_line)
@@ -951,7 +978,8 @@ class pysession:
         return o
     
     # ----------------------------------------------------------------------- #
-    def send(self, lines='', delimiter='\n', raw_mode=True):
+    def send(self, lines='', delimiter='\n', raw_mode=True, 
+            set_debug_dest=True, timeout=0):
         '''
         Major external method to send singl/multiple command(s) to session
 
@@ -972,7 +1000,7 @@ class pysession:
                 msg='\n\nsending cmd - [%s] to device...\n' % cmd,
                 msg_level=DEBUG_MSG_VERBOSE)
 
-            o = self.sendline_expect(cmd)
+            o = self.sendline_expect(cmd, set_debug_dest=set_debug_dest, timeout=timeout)
             output += o
         
         return output
@@ -1025,13 +1053,13 @@ class PYSConfigParser:
 
                 continue
 
+            #if section=='Command.Special': import pdb; pdb.set_trace()
             re_key_value = re.match('(.*)%s(.*)' % self.delimiter, line)
             if re_key_value:
                 k, v = map(str.strip, re_key_value.groups())
                 self.dict[section][k] = v
+                self.values[section].append([k,v])
                 continue
-
-            self.values[section].append(line)
 
             if section == 'Delimiter':
                 self.delimiter = line
@@ -1201,7 +1229,7 @@ class PYSLib:
         if pprint: 
             print PYSLib.pline2('sleeping %d seconds: %s' % (num_sec, reason))
         else:
-            print '\n'
+            print('sleeping %d seconds: %s' % (num_sec, reason))
 
         for i in range(num_sec):
             if i % 10 == 0:
