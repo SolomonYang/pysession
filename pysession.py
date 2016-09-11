@@ -37,7 +37,7 @@ CR   = '\r'
 LF   = '\n'
 CRLF = '\r\n'
 
-CONF_FILENAME   = os.path.join(sys.path[0], 'pysession.conf')
+CONF_FILENAME   = os.path.join(os.path.dirname(__file__), 'pysession.conf')
 MUST_ENABLE     = True
 LOG_FILE_PREFIX = 'pys__'
 LOG_FILE_DIR    = '/tmp'
