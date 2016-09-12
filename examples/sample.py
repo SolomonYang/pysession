@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 '''
-sample script
+sample script, 
+1) read configuration lines from a file
+2) apply them to device
 '''
 
 import os
@@ -21,15 +23,11 @@ except:
 
 def usage():
     print '''
-Usage: sample.py -c <cfgfile> -s <session> -t <tftpsvr>
+Usage: sample.py -c <cfgfile> -s <session>
 
 arguments: 
     -c, --cfgfile     router configuration file
     -s, --session     session info like "telnet 10.1.1.1" or "ssh -l admin gw1.company.com" 
-    -t, --tftsvr      tftp server ip 
-    -i, --ip          management ip 
-    -m, --mask        management ip mask
-    -g, --gw          gateway
     '''
  
 if __name__ == '__main__': 
@@ -40,8 +38,7 @@ if __name__ == '__main__':
         usage()
         sys.exit(2)
 
-    session, tftp_ip, cfg_file = '', '', ''
-    ip, mask, gw = '', '', ''
+    session, cfg_file = '', ''
 
     # parse the sys.argv
     for opt, arg in opts:
@@ -51,18 +48,21 @@ if __name__ == '__main__':
             cfg_file = arg
         elif opt in ('-s', '--session'):
             session = arg
-        elif opt in ('-t', '--tftpsvr'):
-            tftp_ip = arg
-        elif opt in ('-i', '--ip'):
-            ip = arg
-        elif opt in ('-m', '--mask'):
-            mask = arg
-        elif opt in ('-g', '--gw'):
-            gw = arg
     
-    if session == '' or tftp_ip == '' or cfg_file == '':
+    if session == '' or cfg_file == '':
         usage()
         sys.exit(2)
 
-    reload_brcd_ni(session=session, tftp_ip=tftp_ip, cfg_file=cfg_file, 
-        ip=ip, mask=mask, gw=gw)
+    try:
+        with open(cfg_file, 'r') as f:
+            lines = f.readlines()
+    except IOError:
+        print 'Failed to open config file, exit......' 
+        sys.exit(1)
+
+    rtr = pysession(session=session)
+
+    for line in lines:
+        line = line.strip()
+
+        rtr.send(line)
