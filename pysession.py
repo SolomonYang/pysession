@@ -1031,9 +1031,15 @@ class PYSConfigParser:
         self.delimiter = '='
 
     def read(self, filename='pysession.conf'):
-        with open(filename, 'r') as f:
-            conf_lines = f.readlines()
-        f.close
+        try: 
+            with open(filename, 'r') as f: 
+                conf_lines = f.readlines() 
+            f.close()
+
+        except IOError:
+            print '''Critical Error: can't cfg file - %s, exiting....''' % \
+                filename
+            sys.exit(2)
        
         section = 'DefaultValues'
 
