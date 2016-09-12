@@ -2,6 +2,7 @@
 *.bak
 *.log
 *.swp
+*.local
 local*
 examples/local*
 MANIFEST
